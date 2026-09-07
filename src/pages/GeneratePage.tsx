@@ -304,34 +304,44 @@ const persistDraft = useCallback(
     <div
       className={
         phase === 'draft'
-          ? 'mx-auto w-full max-w-[95rem] px-4 py-10 sm:px-8 sm:py-14'
+          ? 'mt-4 w-full px-3 sm:px-4'
           : 'mx-auto max-w-6xl px-4 py-10 sm:px-6 sm:py-14'
       }
     >
       <div className="text-center">
-        <p className="inline-flex items-center gap-2 rounded-full border border-primary-200 bg-white px-3 py-1 text-xs font-medium text-primary-700">
-          <Sparkles className="size-3.5" aria-hidden="true" />
-          Agentic contract drafting
-        </p>
-        <h1 className="mt-4 text-3xl font-bold tracking-tight text-ink-900 sm:text-4xl">
-          Draft an agreement in plain English
-        </h1>
-        <p className="mx-auto mt-3 max-w-2xl text-base leading-relaxed text-ink-600">
-          Describe what you need and Paqt will ask a few targeted questions,
-          then draft a properly formatted contract you can edit inline like a
-          word processor, export as a PDF, and analyze for risks.
-        </p>
+        {phase !== 'draft' ? (
+          <>
+            <p className="inline-flex items-center gap-2 rounded-full border border-primary-200 bg-white px-3 py-1 text-xs font-medium text-primary-700">
+              <Sparkles className="size-3.5" aria-hidden="true" />
+              Agentic contract drafting
+            </p>
+            <h1 className="mt-4 text-3xl font-bold tracking-tight text-ink-900 sm:text-4xl">
+              Draft an agreement in plain English
+            </h1>
+            <p className="mx-auto mt-3 max-w-2xl text-base leading-relaxed text-ink-600">
+              Describe what you need and Paqt will ask a few targeted questions,
+              then draft a properly formatted contract you can edit inline like
+              a word processor, export as a PDF, and analyze for risks.
+            </p>
+          </>
+        ) : null}
       </div>
 
       <div
       className={
         phase === 'draft'
-          ? 'mt-8 grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,380px)] lg:items-start'
+          ? 'mt-4 grid h-[calc(100vh-6rem)] gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,400px)]'
           : 'mt-8 grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,440px)] lg:items-start'
       }
     >
         {/* Composer column */}
-        <div className="flex min-w-0 flex-col gap-6 order-2 lg:sticky lg:top-4">
+        <div
+          className={
+            phase === 'draft'
+              ? 'order-2 min-w-0 lg:h-full lg:overflow-y-auto lg:pr-1'
+              : 'flex min-w-0 flex-col gap-6 order-2 lg:sticky lg:top-4'
+          }
+        >
           {error ? (
             <div className="flex items-start justify-between gap-3 rounded-xl border border-critical-200 bg-critical-50 px-4 py-3">
               <p className="text-sm text-critical-800">{error}</p>
@@ -585,9 +595,9 @@ const persistDraft = useCallback(
         </div>
 
         {/* Preview / editor column */}
-        <div className="min-w-0 order-1 lg:sticky lg:top-4">
+        <div className={phase === 'draft' ? 'order-1 min-w-0 lg:h-full' : 'min-w-0 order-1 lg:sticky lg:top-4'}>
           {phase === 'draft' ? (
-            <div className="overflow-hidden rounded-2xl border border-ink-200 bg-white shadow-card">
+            <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-ink-200 bg-white shadow-card">
               <Suspense
                 fallback={
                   <div className="flex h-96 items-center justify-center">
@@ -659,9 +669,11 @@ const persistDraft = useCallback(
         </div>
       </div>
 
-      <div className="mt-10">
-        <Disclaimer />
-      </div>
+      {phase !== 'draft' ? (
+        <div className="mt-10">
+          <Disclaimer />
+        </div>
+      ) : null}
     </div>
   );
 }

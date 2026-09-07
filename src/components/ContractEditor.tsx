@@ -42,9 +42,9 @@ export function ContractEditor({ doc, contentKey = 0, editable = true, onChange 
   }, [contentKey, doc, editable, editor, onChange]);
 
   return (
-    <div className="contract-sheet">
+    <div className="contract-sheet flex min-h-0 flex-1 flex-col">
       <ContractToolbar editor={editor} />
-      <div className="relative">
+      <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="px-6 py-8 sm:px-10">
           <EditorContent editor={editor} />
         </div>
