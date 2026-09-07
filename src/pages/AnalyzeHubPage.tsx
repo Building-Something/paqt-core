@@ -1,0 +1,132 @@
+import { useNavigate } from 'react-router-dom';
+import { ArrowRight, FileText, Trash2 } from 'lucide-react';
+import { useHistory } from '../hooks/useHistory';
+import { useAnalysis } from '../contexts/AnalysisContext';
+import { formatRelativeTime, type HistoryEntry } from '../services/historyService';
+import { UploadDropzone } from '../components/UploadDropzone';
+import { EmptyState } from '../components/EmptyState';
+import { Disclaimer } from '../components/Disclaimer';
+import { ScoreBadge } from '../components/ScoreBadge';
+
+export function AnalyzeHubPage() {
+  const navigate = useNavigate();
+  const { entries, remove } = useHistory();
+  const { beginAnalysis, progress } = useAnalysis();
+
+  const analyses = entries
+    .filter((entry) => entry.kind === 'analysis')
+    .slice(0, 12);
+
+  const busy =
+    progress.stage !== 'idle' &&
+    progress.stage !== 'complete' &&
+    progress.stage !== 'error';
+
+  function handleFileSelected(file: File) {
+    void beginAnalysis(file).then(() => navigate('/analysis'));
+  }
+
+  function handleOpen(entry: HistoryEntry) {
+    navigate(`/analysis?id=${entry.id}`);
+  }
+
+  return (
+    <div className="mx-auto max-w-4xl px-4 py-8 sm:px-6 sm:py-12">
+      <p className="text-sm font-medium text-primary-700">Analyze</p>
+      <h1 className="mt-1 text-3xl font-bold tracking-tight text-ink-900">
+        Run a contract review
+      </h1>
+      <p className="mt-2 max-w-2xl text-sm leading-relaxed text-ink-600">
+        Upload a PDF and Paqt extracts the text in your browser, then flags the
+        clauses that deserve your attention with the exact page and quote behind
+        each finding.
+      </p>
+
+      <div className="mt-8">
+        <UploadDropzone onFileSelected={handleFileSelected} busy={busy} />
+      </div>
+
+      <section className="mt-12">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-base font-semibold text-ink-900">Past reviews</h2>
+          <span className="text-xs text-ink-400">
+            {analyses.length} saved in this browser
+          </span>
+        </div>
+
+        <div className="mt-4">
+          {analyses.length === 0 ? (
+            <EmptyState
+              title="No reviews yet"
+              description="Completed analyses will be kept here so you can reopen findings without re-running the AI."
+            />
+          ) : (
+            <ul className="flex flex-col gap-3">
+              {analyses.map((entry) => {
+                const risks = entry.analysis?.risks.length ?? 0;
+                const score = entry.analysis?.overallRiskScore ?? null;
+                return (
+                  <li key={entry.id}>
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => handleOpen(entry)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          handleOpen(entry);
+                        }
+                      }}
+                      aria-label={`Open ${entry.name}`}
+                      className="group flex cursor-pointer items-center gap-3 rounded-xl border border-ink-200 bg-white px-4 py-3 transition-colors hover:border-primary-300 hover:bg-primary-50/40"
+                    >
+                      <div className="rounded-lg bg-ink-100 p-2 text-ink-500">
+                        <FileText className="size-4" aria-hidden="true" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-semibold text-ink-900">
+                          {entry.name}
+                        </p>
+                        <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-500">
+                          <span>{formatRelativeTime(entry.updatedAt)}</span>
+                          {entry.pageCount ? (
+                            <span className="text-ink-400">
+                              {entry.pageCount} page{entry.pageCount === 1 ? '' : 's'}
+                            </span>
+                          ) : null}
+                          <span className="text-ink-400">
+                            {risks} risk{risks === 1 ? '' : 's'}
+                          </span>
+                          {score !== null ? <ScoreBadge score={score} /> : null}
+                        </p>
+                      </div>
+                      <ArrowRight
+                        className="size-4 shrink-0 text-ink-300 transition-colors group-hover:text-primary-600"
+                        aria-hidden="true"
+                      />
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          remove(entry.id);
+                        }}
+                        aria-label={`Delete ${entry.name}`}
+                        className="shrink-0 rounded-lg p-2 text-ink-400 transition-colors hover:bg-critical-100 hover:text-critical-700"
+                      >
+                        <Trash2 className="size-4" aria-hidden="true" />
+                      </button>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      </section>
+
+      <div className="mt-12 border-t border-ink-200 pt-6">
+        <Disclaimer />
+      </div>
+    </div>
+  );
+}
