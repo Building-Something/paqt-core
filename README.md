@@ -43,6 +43,8 @@ npm start       # serves dist/ + API, honors $PORT (default 3001)
 | `npm start`       | Serve `dist/` and the API from Express               |
 | `npm run preview` | Preview the built bundle                             |
 | `npm run lint`    | ESLint over the repo                                 |
+| `npm test`        | Run the Vitest + Testing Library suite (jsdom)        |
+| `npm run test:watch` | Run Vitest in watch mode                           |
 | `docker compose up --build -d` | Run frontend + backend containers       |
 
 ## Repository layout
@@ -117,11 +119,36 @@ curl http://localhost:3001/analyze         # SPA fallback
 ```bash
 npm run lint
 npx tsc --noEmit -p tsconfig.app.json      # strict type-check
+npm test                                  # component + unit tests (Vitest, jsdom)
 npm run build
 npx tsx scripts/verify-core.ts             # core-logic assertions (ALL PASS)
 npx tsx scripts/verify-compose.ts          # markdown <-> editor JSON / PDF def checks
 npx tsx scripts/verify-pdf.ts              # end-to-end pdfmake render (multi-page PDF)
 ```
+
+### Tests
+
+`npm test` runs the Vitest suite in a jsdom environment (React Testing Library for
+
+components, plain Vitest for pure logic). Note that each gate above serves a distinct
+
+purpose:
+
+- `scripts/verify-*.ts` run with `npx tsx` as a before-you-commit sanity check on pure
+
+  logic (they exit non-zero on failure but are not a test runner).
+- `npm test` is the real regression suite and should be kept green as features evolve:
+
+  - `src/pages/GeneratePage.test.tsx` — brief/draft rendering and the draft → analyze
+
+    navigation (verifies Analyze for risks navigates immediately, before the Groq
+
+    pipeline resolves).
+  - `src/utils/contractDocument.test.ts` — markdown ↔ editor-JSON round-trips, marks,
+
+    flattening, signature detection, and the pdfmake doc-definition structure.
+
+Add a test alongside any new feature; run `npm run test:watch` while developing.
 
 ## Deployment
 

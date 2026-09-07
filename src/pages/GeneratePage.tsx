@@ -259,8 +259,8 @@ const persistDraft = useCallback(
     if (!markdown.trim() || working) {
       return;
     }
-    await beginWithText(`${draftSlug(brief)} (generated)`, markdown);
     navigate('/analysis');
+    void beginWithText(`${draftSlug(brief)} (generated)`, markdown);
   }
 
   async function handleExportPdf() {
