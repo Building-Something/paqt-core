@@ -45,7 +45,7 @@ export function ContractEditor({ doc, contentKey = 0, editable = true, onChange 
     <div className="contract-sheet">
       <ContractToolbar editor={editor} />
       <div className="relative">
-        <div className="mx-auto max-w-[8.25in] px-6 py-8 sm:px-10">
+        <div className="px-6 py-8 sm:px-10">
           <EditorContent editor={editor} />
         </div>
       </div>

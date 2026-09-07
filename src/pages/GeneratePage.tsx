@@ -78,7 +78,7 @@ function SignaturePreview() {
     </div>
   );
   return (
-    <div className="mx-auto max-w-[8.25in] px-6 py-10 sm:px-10">
+    <div className="px-6 py-10 sm:px-10">
       <div className="border-t border-ink-200 pt-8 text-ink-800">
         <p className="text-sm text-ink-600">
           Signature lines are rendered automatically in the PDF export.
@@ -301,7 +301,13 @@ const persistDraft = useCallback(
   }
 
   return (
-    <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6 sm:py-14">
+    <div
+      className={
+        phase === 'draft'
+          ? 'mx-auto w-full max-w-[95rem] px-4 py-10 sm:px-8 sm:py-14'
+          : 'mx-auto max-w-6xl px-4 py-10 sm:px-6 sm:py-14'
+      }
+    >
       <div className="text-center">
         <p className="inline-flex items-center gap-2 rounded-full border border-primary-200 bg-white px-3 py-1 text-xs font-medium text-primary-700">
           <Sparkles className="size-3.5" aria-hidden="true" />
@@ -317,9 +323,15 @@ const persistDraft = useCallback(
         </p>
       </div>
 
-      <div className="mt-8 grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,440px)] lg:items-start">
+      <div
+      className={
+        phase === 'draft'
+          ? 'mt-8 grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,380px)] lg:items-start'
+          : 'mt-8 grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,440px)] lg:items-start'
+      }
+    >
         {/* Composer column */}
-        <div className="flex min-w-0 flex-col gap-6 order-2">
+        <div className="flex min-w-0 flex-col gap-6 order-2 lg:sticky lg:top-4">
           {error ? (
             <div className="flex items-start justify-between gap-3 rounded-xl border border-critical-200 bg-critical-50 px-4 py-3">
               <p className="text-sm text-critical-800">{error}</p>
