@@ -17,16 +17,11 @@ export function ChatMessage({ message }: ChatMessageProps) {
   const isUser = message.sender === 'user';
 
   return (
-    <div
-      className={[
-        'flex items-start gap-3',
-        isUser ? 'flex-row-reverse' : '',
-      ].join(' ')}
-    >
+    <div className={['flex items-start gap-3', isUser ? 'flex-row-reverse' : ''].join(' ')}>
       <div
         className={[
           'mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full',
-          isUser ? 'bg-ink-800 text-white' : 'bg-primary-100 text-primary-700',
+          isUser ? 'bg-foreground text-background' : 'bg-muted text-muted-foreground',
         ].join(' ')}
         aria-hidden="true"
       >
@@ -34,22 +29,20 @@ export function ChatMessage({ message }: ChatMessageProps) {
       </div>
       <div
         className={[
-          'min-w-0 rounded-2xl px-4 py-3',
+          'min-w-0 rounded-xl px-4 py-3',
           isUser
-            ? 'max-w-[85%] rounded-tr-sm bg-ink-800 text-white'
-            : 'max-w-none flex-1 rounded-tl-sm border border-ink-200 bg-white text-ink-800',
+            ? 'max-w-[85%] rounded-tr-sm bg-foreground text-background'
+            : 'max-w-none flex-1 rounded-tl-sm border border-border bg-card text-foreground',
         ].join(' ')}
       >
-        <p
-          className={`text-xs font-medium ${isUser ? 'text-white/70' : 'text-ink-400'}`}
-        >
+        <p className={`text-xs font-medium ${isUser ? 'text-background/60' : 'text-muted-foreground'}`}>
           {isUser ? 'You' : 'Paqt'}
           <span className="ml-2 font-normal">{formatTime(message.timestamp)}</span>
         </p>
         {isUser ? (
           <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed">{message.text}</p>
         ) : (
-          <div className="mt-1 min-w-0">
+          <div className="mt-1 min-w-0 text-foreground/90">
             <MarkdownBody>{message.text}</MarkdownBody>
           </div>
         )}

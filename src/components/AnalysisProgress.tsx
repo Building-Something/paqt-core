@@ -25,21 +25,21 @@ export function AnalysisProgress({ progress, fileName }: AnalysisProgressProps) 
   return (
     <div className="card px-5 py-6" role="status" aria-live="polite">
       <div className="flex items-start gap-4">
-        <div className="rounded-full bg-primary-100 p-3 text-primary-700">
+        <div className="rounded-full bg-muted p-3 text-primary">
           <Loader2 className="size-6 animate-spin" aria-hidden="true" />
         </div>
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold text-ink-800">{progress.label}</p>
-          <p className="mt-1 truncate text-xs text-ink-400">{fileName}</p>
+          <p className="text-sm font-medium text-foreground">{progress.label}</p>
+          <p className="mt-1 truncate text-xs text-muted-foreground">{fileName}</p>
           {progress.pageRange ? (
-            <p className="mt-1 text-xs font-medium text-primary-700">
+            <p className="mt-1 text-xs font-medium text-primary">
               Pages {progress.pageRange.replace('-', '–')}
             </p>
           ) : null}
-          <div className="mt-4 h-1.5 w-full overflow-hidden rounded-full bg-ink-100">
-            <div className="h-full w-2/5 animate-pulse rounded-full bg-primary-500" />
+          <div className="mt-4 h-1.5 w-full overflow-hidden rounded-full bg-muted">
+            <div className="h-full w-2/5 animate-pulse rounded-full bg-primary" />
           </div>
-          <p className="mt-2 text-xs text-ink-500">
+          <p className="mt-2 text-xs text-muted-foreground">
             {ICONS_BY_STAGE[progress.stage] ?? 'Working through the document…'}
           </p>
         </div>

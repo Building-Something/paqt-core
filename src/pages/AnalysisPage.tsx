@@ -13,6 +13,7 @@ import { ChatInterface } from '../components/ChatInterface';
 import { ExportButton } from '../components/ExportButton';
 import { ErrorState } from '../components/ErrorState';
 import { Disclaimer } from '../components/Disclaimer';
+import { Button } from '../components/ui/button';
 
 type MobileTab = 'summary' | 'document' | 'assistant';
 
@@ -89,20 +90,20 @@ export function AnalysisPage() {
       : progress.label;
 
   const documentPane = isRecord ? (
-    <div className="flex h-full flex-col items-center justify-center gap-3 bg-ink-100/60 p-6 text-center">
-      <div className="rounded-full bg-ink-200 p-3 text-ink-400">
+    <div className="flex h-full flex-col items-center justify-center gap-3 bg-muted/40 p-6 text-center">
+      <div className="rounded-full bg-muted p-3 text-muted-foreground">
         <FileText className="size-6" aria-hidden="true" />
       </div>
-      <p className="text-sm font-semibold text-ink-800">
+      <p className="text-sm font-medium text-foreground">
         Original PDF not retained
       </p>
-      <p className="max-w-sm text-sm leading-relaxed text-ink-500">
+      <p className="max-w-sm text-sm leading-relaxed text-muted-foreground">
         Paqt doesn’t store your uploaded document after analysis. Re-upload the
         PDF to review it page by page or ask follow-up questions.
       </p>
-      <Link to="/analyze" className="btn-primary">
-        Re-analyze a contract
-      </Link>
+      <Button variant="outline" asChild>
+        <Link to="/analyze">Re-analyze a contract</Link>
+      </Button>
     </div>
   ) : file ? (
     <PdfViewer
@@ -131,20 +132,20 @@ export function AnalysisPage() {
 
   const activeTabClass = (tab: MobileTab) =>
     mobileTab === tab
-      ? 'border-ink-800 text-ink-900'
-      : 'border-transparent text-ink-500 hover:text-ink-800';
+      ? 'border-foreground text-foreground'
+      : 'border-transparent text-muted-foreground hover:text-foreground';
 
   return (
     <div className="flex flex-col lg:h-[100dvh]">
       {/* Studio header */}
-      <div className="flex flex-wrap items-center gap-3 border-b border-ink-200 bg-white px-4 py-3 sm:px-6">
+      <div className="flex flex-wrap items-center gap-3 border-b border-border bg-background px-4 py-3 sm:px-6">
         <div className="flex min-w-0 items-center gap-2.5">
-          <div className="rounded-lg bg-ink-100 p-2 text-ink-500">
+          <div className="rounded-md bg-muted p-2 text-muted-foreground">
             <FileText className="size-4" aria-hidden="true" />
           </div>
           <div className="min-w-0">
-            <p className="truncate text-sm font-semibold text-ink-900">{title}</p>
-            <p className="text-xs text-ink-400">{headerMeta}</p>
+            <p className="truncate text-sm font-medium text-foreground">{title}</p>
+            <p className="text-xs text-muted-foreground">{headerMeta}</p>
           </div>
         </div>
         <div className="ml-auto flex items-center gap-2">
@@ -155,7 +156,7 @@ export function AnalysisPage() {
       {/* Mobile tabs */}
       {!isRecord ? (
         <div
-          className="flex border-b border-ink-200 bg-white lg:hidden"
+          className="flex border-b border-border bg-background lg:hidden"
           role="tablist"
           aria-label="Analysis sections"
         >
@@ -197,8 +198,8 @@ export function AnalysisPage() {
             progress={progress}
             fileName={fileName}
           />
-          <div className="mt-4 flex items-start gap-2 rounded-xl border border-ink-200 bg-white px-4 py-3 text-sm text-ink-600">
-            <GitCompareArrows className="mt-0.5 size-4 shrink-0 text-primary-600" aria-hidden="true" />
+          <div className="mt-4 flex items-start gap-2 rounded-lg border border-border bg-card px-4 py-3 text-sm text-muted-foreground">
+            <GitCompareArrows className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" />
             <span>
               The document is processed in chunks so large contracts stay
               accurate without losing context.
@@ -209,22 +210,22 @@ export function AnalysisPage() {
         <>
           {/* Desktop three-zone grid */}
           <div className="hidden min-h-0 flex-1 grid-cols-[380px_1fr_360px] gap-0 lg:grid xl:grid-cols-[420px_1fr_400px]">
-            <aside className="min-h-0 overflow-y-auto border-r border-ink-200 bg-white">
+            <aside className="min-h-0 overflow-y-auto border-r border-border bg-background">
               <div className="space-y-6 p-5">
                 <section aria-labelledby="summary-heading">
-                  <h2 id="summary-heading" className="mb-3 text-sm font-semibold text-ink-800">
+                  <h2 id="summary-heading" className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                     Decision brief
                   </h2>
                   <ContractSummary analysis={analysis} />
                 </section>
                 <section aria-labelledby="breakdown-heading">
-                  <h2 id="breakdown-heading" className="mb-3 text-sm font-semibold text-ink-800">
+                  <h2 id="breakdown-heading" className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                     Risk breakdown
                   </h2>
                   <RiskBreakdown risks={analysis.risks} />
                 </section>
-                <section aria-labelledby="risks-heading" className="border-t border-ink-100 pt-5">
-                  <h2 id="risks-heading" className="mb-3 text-sm font-semibold text-ink-800">
+                <section aria-labelledby="risks-heading" className="border-t border-border pt-5">
+                  <h2 id="risks-heading" className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                     Risks ({analysis.risks.length})
                   </h2>
                   <RiskList
@@ -233,28 +234,28 @@ export function AnalysisPage() {
                     onSelectRisk={handleSelectRisk}
                   />
                 </section>
-                <div className="mt-6 border-t border-ink-100 pt-4">
+                <div className="mt-6 border-t border-border pt-4">
                   <Disclaimer />
                 </div>
               </div>
             </aside>
 
             <section
-              className="min-w-0 min-h-0 bg-ink-100/60"
+              className="min-w-0 min-h-0 bg-muted/40"
               aria-label="Document viewer"
             >
               {documentPane}
             </section>
 
-            <aside className="min-h-0 overflow-hidden border-l border-ink-200 bg-white">
+            <aside className="min-h-0 overflow-hidden border-l border-border bg-background">
               <ChatInterface disabled={isRecord} />
             </aside>
           </div>
 
           {/* Mobile stacked layout */}
           {isRecord ? (
-            <div className="space-y-6 bg-ink-50 px-4 py-5 lg:hidden">
-              <div className="rounded-xl border border-ink-200 bg-white px-4 py-3 text-sm text-ink-600">
+            <div className="space-y-6 bg-muted/40 px-4 py-5 lg:hidden">
+              <div className="rounded-lg border border-border bg-card px-4 py-3 text-sm text-muted-foreground">
                 This is an archived review. The original PDF isn’t stored after
                 analysis — re-upload to view it page by page or ask questions.
               </div>
@@ -270,7 +271,7 @@ export function AnalysisPage() {
           ) : (
             <div className="lg:hidden">
               {mobileTab === 'summary' ? (
-                <div className="space-y-6 bg-ink-50 px-4 py-5">
+                <div className="space-y-6 bg-muted/40 px-4 py-5">
                   {analysis ? (
                     <>
                       <ContractSummary analysis={analysis} />
@@ -281,19 +282,19 @@ export function AnalysisPage() {
               ) : null}
 
               {mobileTab === 'document' ? (
-                <div className="h-[calc(100dvh-9rem)] bg-ink-100/60">
+                <div className="h-[calc(100dvh-9rem)] bg-muted/40">
                   {documentPane}
                 </div>
               ) : null}
 
               {mobileTab === 'assistant' ? (
-                <div className="h-[calc(100dvh-9rem)] bg-white">
+                <div className="h-[calc(100dvh-9rem)] bg-background">
                   <ChatInterface disabled={isRecord} />
                 </div>
               ) : null}
 
               {mobileTab === 'summary' ? (
-                <div className="border-t border-ink-200 bg-white px-4 py-4">
+                <div className="border-t border-border bg-background px-4 py-4">
                   <div className="mb-4">
                     <RiskList
                       risks={analysis.risks}

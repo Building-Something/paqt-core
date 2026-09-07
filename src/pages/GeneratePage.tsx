@@ -25,6 +25,7 @@ import {
   markdownToDoc,
 } from '../utils/contractDocument';
 import { createHistoryId, getHistoryEntry, upsertHistoryEntry } from '../services/historyService';
+import { Button } from '../components/ui/button';
 
 const ContractEditor = lazy(() =>
   import('../components/ContractEditor').then((module) => ({ default: module.ContractEditor })),
@@ -68,19 +69,19 @@ function errorMessage(error: unknown): string {
 function SignaturePreview() {
   const fields = (label: string) => (
     <div className="space-y-6">
-      <p className="text-sm font-semibold tracking-wide text-ink-800">{label}</p>
+      <p className="text-sm font-medium tracking-wide text-foreground">{label}</p>
       {['By:', 'Name:', 'Title:', 'Date:'].map((field) => (
         <div key={field}>
-          <p className="text-xs text-ink-600">{field}</p>
-          <div className="mt-1 border-b border-dotted border-ink-400" />
+          <p className="text-xs text-muted-foreground">{field}</p>
+          <div className="mt-1 border-b border-dotted border-muted-foreground/40" />
         </div>
       ))}
     </div>
   );
   return (
     <div className="px-6 py-10 sm:px-10">
-      <div className="border-t border-ink-200 pt-8 text-ink-800">
-        <p className="text-sm text-ink-600">
+      <div className="border-t border-border pt-8 text-foreground">
+        <p className="text-sm text-muted-foreground">
           Signature lines are rendered automatically in the PDF export.
         </p>
       </div>
@@ -311,14 +312,14 @@ const persistDraft = useCallback(
       <div className="text-center">
         {phase !== 'draft' ? (
           <>
-            <p className="inline-flex items-center gap-2 rounded-full border border-primary-200 bg-white px-3 py-1 text-xs font-medium text-primary-700">
-              <Sparkles className="size-3.5" aria-hidden="true" />
+            <p className="inline-flex items-center gap-2 rounded-full border border-border bg-background px-3 py-1 text-xs font-medium text-muted-foreground shadow-sm">
+              <Sparkles className="size-3.5 text-primary" aria-hidden="true" />
               Agentic contract drafting
             </p>
-            <h1 className="mt-4 text-3xl font-bold tracking-tight text-ink-900 sm:text-4xl">
+            <h1 className="mt-4 text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">
               Draft an agreement in plain English
             </h1>
-            <p className="mx-auto mt-3 max-w-2xl text-base leading-relaxed text-ink-600">
+            <p className="mx-auto mt-3 max-w-2xl text-base leading-relaxed text-muted-foreground">
               Describe what you need and Paqt will ask a few targeted questions,
               then draft a properly formatted contract you can edit inline like
               a word processor, export as a PDF, and analyze for risks.
@@ -343,12 +344,12 @@ const persistDraft = useCallback(
           }
         >
           {error ? (
-            <div className="flex items-start justify-between gap-3 rounded-xl border border-critical-200 bg-critical-50 px-4 py-3">
-              <p className="text-sm text-critical-800">{error}</p>
+            <div className="flex items-start justify-between gap-3 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3">
+              <p className="text-sm text-destructive">{error}</p>
               <button
                 type="button"
                 onClick={() => setError(null)}
-                className="shrink-0 text-xs font-medium text-critical-700 hover:underline"
+                className="shrink-0 text-xs font-medium text-destructive hover:underline"
               >
                 Dismiss
               </button>
@@ -356,8 +357,8 @@ const persistDraft = useCallback(
           ) : null}
 
           {phase === 'brief' ? (
-            <div className="rounded-2xl border border-ink-200 bg-white p-6 shadow-card">
-              <label htmlFor="brief" className="block text-sm font-medium text-ink-800">
+            <div className="rounded-xl border border-border bg-card p-6 shadow-sm">
+              <label htmlFor="brief" className="block text-sm font-medium text-foreground">
                 What kind of agreement do you need?
               </label>
               <div className="relative mt-3">
@@ -368,13 +369,13 @@ const persistDraft = useCallback(
                   onChange={(event) => setBrief(event.target.value)}
                   disabled={working}
                   placeholder='e.g. "Create a $5,000 freelance developer contract for building a landing page over 4 weeks, net-30 payment schedule, client owns the final code."'
-                  className="w-full resize-y rounded-xl border border-ink-200 bg-ink-50/50 px-4 py-3 text-sm leading-relaxed text-ink-800 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-200 disabled:opacity-60"
+                  className="w-full resize-y rounded-md border border-input bg-background px-4 py-3 text-sm leading-relaxed shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 disabled:opacity-60"
                 />
                 <button
                   type="button"
                   onClick={handleStart}
                   disabled={!brief.trim() || working}
-                  className="absolute bottom-3 right-3 inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="absolute bottom-3 right-3 inline-flex h-9 items-center gap-2 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {working ? (
                     <Loader2 className="size-4 animate-spin" aria-hidden="true" />
@@ -385,14 +386,14 @@ const persistDraft = useCallback(
                 </button>
               </div>
               {working ? (
-                <p className="mt-3 flex items-center gap-2 text-sm text-ink-500">
-                  <Loader2 className="size-4 animate-spin text-primary-600" aria-hidden="true" />
+                <p className="mt-3 flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="size-4 animate-spin text-primary" aria-hidden="true" />
                   {busyMessage}
                 </p>
               ) : null}
 
-              <div className="mt-5 border-t border-ink-100 pt-4">
-                <p className="text-xs font-medium uppercase tracking-wide text-ink-400">
+              <div className="mt-5 border-t border-border pt-4">
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                   Try an example
                 </p>
                 <div className="mt-3 space-y-2">
@@ -401,7 +402,7 @@ const persistDraft = useCallback(
                       key={example}
                       type="button"
                       onClick={() => setBrief(example)}
-                      className="block w-full rounded-lg border border-ink-100 bg-ink-50/50 px-4 py-2.5 text-left text-sm text-ink-600 transition-colors hover:border-primary-300 hover:bg-primary-50 hover:text-ink-800"
+                      className="block w-full rounded-md border border-border bg-background px-4 py-2.5 text-left text-sm text-muted-foreground shadow-sm transition-colors hover:bg-accent hover:text-foreground"
                     >
                       {example}
                     </button>
@@ -412,18 +413,18 @@ const persistDraft = useCallback(
           ) : null}
 
           {phase === 'questions' ? (
-            <div className="rounded-2xl border border-primary-200 bg-white p-6 shadow-card">
+            <div className="rounded-xl border border-border bg-card p-6 shadow-sm">
               <div className="flex items-center gap-3">
-                <div className="rounded-lg bg-primary-100 p-2 text-primary-700">
+                <div className="rounded-lg bg-muted p-2 text-primary">
                   <FilePenLine className="size-5" aria-hidden="true" />
                 </div>
                 <div>
-                  <h2 className="text-base font-semibold text-ink-900">
+                  <h2 className="text-base font-semibold text-foreground">
                     {questionCount > 0
                       ? 'A few details will make this much better'
                       : 'Drafting'}{' '}
                   </h2>
-                  <p className="text-sm text-ink-500">
+                  <p className="text-sm text-muted-foreground">
                     Answer what you know, or draft now and let Paqt list its assumptions.
                   </p>
                 </div>
@@ -435,7 +436,7 @@ const persistDraft = useCallback(
                     <div key={`${question}-${index + 1}`}>
                       <label
                         htmlFor={`question-${index + 1}`}
-                        className="text-sm font-medium text-ink-800"
+                        className="text-sm font-medium text-foreground"
                       >
                         {index + 1}. {question}
                       </label>
@@ -451,7 +452,7 @@ const persistDraft = useCallback(
                           }))
                         }
                         placeholder="I don't know yet"
-                        className="mt-2 w-full rounded-xl border border-ink-200 bg-ink-50/50 px-4 py-2.5 text-sm text-ink-800 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-200 disabled:opacity-60"
+                        className="mt-2 w-full rounded-md border border-input bg-background px-4 py-2.5 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 disabled:opacity-60"
                       />
                     </div>
                   ))}
@@ -459,42 +460,27 @@ const persistDraft = useCallback(
               ) : null}
 
               <div className="mt-6 flex flex-wrap items-center gap-3">
-                <button
-                  type="button"
-                  onClick={() => runCreate(answers)}
-                  disabled={working}
-                  className="btn-primary"
-                >
+                <Button onClick={() => runCreate(answers)} disabled={working}>
                   {working ? (
                     <Loader2 className="size-4 animate-spin" aria-hidden="true" />
                   ) : (
                     <Sparkles className="size-4" aria-hidden="true" />
                   )}
                   Draft the agreement
-                </button>
+                </Button>
                 {questionCount > 0 ? (
-                  <button
-                    type="button"
-                    onClick={() => runCreate({})}
-                    disabled={working}
-                    className="btn-secondary"
-                  >
+                  <Button variant="secondary" onClick={() => runCreate({})} disabled={working}>
                     Skip — draft with assumptions
-                  </button>
+                  </Button>
                 ) : null}
-                <button
-                  type="button"
-                  onClick={resetToBrief}
-                  disabled={working}
-                  className="btn-ghost"
-                >
+                <Button variant="ghost" onClick={resetToBrief} disabled={working}>
                   <ArrowLeft className="size-4" aria-hidden="true" />
                   Edit the brief
-                </button>
+                </Button>
               </div>
               {working ? (
-                <p className="mt-4 flex items-center gap-2 text-sm text-ink-500">
-                  <Loader2 className="size-4 animate-spin text-primary-600" aria-hidden="true" />
+                <p className="mt-4 flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="size-4 animate-spin text-primary" aria-hidden="true" />
                   {busyMessage}
                 </p>
               ) : null}
@@ -503,49 +489,39 @@ const persistDraft = useCallback(
 
           {phase === 'draft' ? (
             <>
-              <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-ink-200 bg-white p-4 shadow-card">
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card p-4 shadow-sm">
                 <div>
-                  <p className="text-sm font-semibold text-ink-900">
+                  <p className="text-sm font-semibold text-foreground">
                     Your draft is ready
                   </p>
-                  <p className="text-xs text-ink-500">
+                  <p className="text-xs text-muted-foreground">
                     {sectionCount} section{sectionCount === 1 ? '' : 's'} ·
                     edit inline, then export or analyze. Every change is saved
                     to history automatically.
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={handleExportPdf}
-                    disabled={working || !markdown.trim()}
-                    className="btn-secondary"
-                  >
+                  <Button variant="secondary" onClick={handleExportPdf} disabled={working || !markdown.trim()}>
                     {working && busyMessage.startsWith('Preparing') ? (
                       <Loader2 className="size-4 animate-spin" aria-hidden="true" />
                     ) : (
                       <FileDown className="size-4" aria-hidden="true" />
                     )}
                     Export PDF
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleAnalyze}
-                    disabled={working}
-                    className="btn-primary"
-                  >
+                  </Button>
+                  <Button onClick={handleAnalyze} disabled={working}>
                     <ScanSearch className="size-4" aria-hidden="true" />
                     Analyze for risks
-                  </button>
+                  </Button>
                 </div>
               </div>
 
-              <div className="rounded-2xl border border-ink-200 bg-white p-6 shadow-card">
-                <h2 className="flex items-center gap-2 text-base font-semibold text-ink-900">
-                  <RefreshCcw className="size-4 text-primary-600" aria-hidden="true" />
+              <div className="rounded-xl border border-border bg-card p-6 shadow-sm">
+                <h2 className="flex items-center gap-2 text-base font-semibold text-foreground">
+                  <RefreshCcw className="size-4 text-primary" aria-hidden="true" />
                   Ask for a change
                 </h2>
-                <p className="mt-1 text-sm text-ink-500">
+                <p className="mt-1 text-sm text-muted-foreground">
                   Tell Paqt what to alter — payment terms, IP ownership, liability
                   caps, an added clause — and the whole draft is updated
                   consistently.
@@ -557,39 +533,30 @@ const persistDraft = useCallback(
                   disabled={working}
                   onChange={(event) => setRevision(event.target.value)}
                   placeholder='e.g. "Change Net-30 to a 25% deposit and Net-45 balance, and add a non-compete for 6 months."'
-                  className="mt-4 w-full resize-y rounded-xl border border-ink-200 bg-ink-50/50 px-4 py-3 text-sm leading-relaxed text-ink-800 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-200 disabled:opacity-60"
+                  className="mt-4 w-full resize-y rounded-md border border-input bg-background px-4 py-3 text-sm leading-relaxed shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 disabled:opacity-60"
                 />
                 <div className="mt-3 flex items-center justify-between gap-3">
-                  <button
-                    type="button"
-                    onClick={handleRevise}
-                    disabled={!revision.trim() || working}
-                    className="btn-primary"
-                  >
+                  <Button onClick={handleRevise} disabled={!revision.trim() || working}>
                     {working ? (
                       <Loader2 className="size-4 animate-spin" aria-hidden="true" />
                     ) : (
                       <RefreshCcw className="size-4" aria-hidden="true" />
                     )}
                     Revise draft
-                  </button>
+                  </Button>
                   {working ? (
-                    <p className="flex items-center gap-2 text-sm text-ink-500">
-                      <Loader2 className="size-4 animate-spin text-primary-600" aria-hidden="true" />
+                    <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <Loader2 className="size-4 animate-spin text-primary" aria-hidden="true" />
                       {busyMessage}
                     </p>
                   ) : null}
                 </div>
               </div>
 
-              <button
-                type="button"
-                onClick={resetToBrief}
-                className="btn-ghost w-full"
-              >
+              <Button variant="ghost" className="w-full" onClick={resetToBrief}>
                 <ArrowLeft className="size-4" aria-hidden="true" />
                 Start a new brief
-              </button>
+              </Button>
             </>
           ) : null}
         </div>
@@ -597,11 +564,11 @@ const persistDraft = useCallback(
         {/* Preview / editor column */}
         <div className={phase === 'draft' ? 'order-1 min-w-0 lg:h-full' : 'min-w-0 order-1 lg:sticky lg:top-4'}>
           {phase === 'draft' ? (
-            <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-ink-200 bg-white shadow-card">
+            <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-card shadow-sm">
               <Suspense
                 fallback={
                   <div className="flex h-96 items-center justify-center">
-                    <Loader2 className="size-6 animate-spin text-primary-600" aria-hidden="true" />
+                    <Loader2 className="size-6 animate-spin text-primary" aria-hidden="true" />
                   </div>
                 }
               >
@@ -610,15 +577,15 @@ const persistDraft = useCallback(
               {hasSignatures ? <SignaturePreview /> : null}
             </div>
           ) : (
-            <div className="rounded-2xl border border-ink-200 bg-white p-8 shadow-card">
+            <div className="rounded-xl border border-border bg-card p-8 shadow-sm">
               <div className="flex flex-col items-center gap-3 text-center">
-                <div className="rounded-full bg-primary-100 p-3 text-primary-700">
+                <div className="rounded-full bg-muted p-3 text-primary">
                   <FilePenLine className="size-6" aria-hidden="true" />
                 </div>
-                <h2 className="text-lg font-bold text-ink-900">
+                <h2 className="text-lg font-semibold text-foreground">
                   Your agreement will appear here
                 </h2>
-                <p className="max-w-sm text-sm leading-relaxed text-ink-500">
+                <p className="max-w-sm text-sm leading-relaxed text-muted-foreground">
                   Paqt drafts the agreement side by side as you work through
                   the steps, ready for direct editing.
                 </p>
@@ -632,10 +599,10 @@ const persistDraft = useCallback(
                         className={[
                           'flex size-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold',
                           status === 'done'
-                            ? 'bg-primary-600 text-white'
+                            ? 'bg-primary text-primary-foreground'
                             : status === 'current'
-                              ? 'border-2 border-primary-500 bg-white text-primary-700'
-                              : 'bg-ink-100 text-ink-400',
+                              ? 'border-2 border-primary bg-background text-primary'
+                              : 'bg-muted text-muted-foreground',
                         ].join(' ')}
                         aria-hidden="true"
                       >
@@ -649,8 +616,8 @@ const persistDraft = useCallback(
                         className={[
                           'text-sm',
                           status === 'pending'
-                            ? 'text-ink-400'
-                            : 'font-medium text-ink-800',
+                            ? 'text-muted-foreground/70'
+                            : 'font-medium text-foreground',
                         ].join(' ')}
                       >
                         {step.label}
@@ -659,7 +626,7 @@ const persistDraft = useCallback(
                   );
                 })}
               </ol>
-              <div className="mt-8 rounded-xl border border-primary-200 bg-primary-50/60 px-4 py-3 text-sm text-primary-900">
+              <div className="mt-8 rounded-lg border border-primary/20 bg-primary/5 px-4 py-3 text-sm text-foreground/90">
                 When the draft is ready, follow-up changes are applied to the
                 whole document — not find-and-replace — and you can export a
                 professionally formatted PDF.

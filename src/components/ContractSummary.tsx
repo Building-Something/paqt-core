@@ -8,15 +8,15 @@ interface ContractSummaryProps {
 
 function scoreColor(score: number): string {
   if (score >= 70) {
-    return '#d92d20';
+    return '#dc2626';
   }
   if (score >= 45) {
-    return '#f79009';
+    return '#ea580c';
   }
   if (score >= 25) {
-    return '#fdb022';
+    return '#d97706';
   }
-  return '#12b76a';
+  return '#16a34a';
 }
 
 function scoreLabel(score: number): string {
@@ -41,14 +41,7 @@ function ScoreRing({ score }: { score: number }) {
   return (
     <div className="relative inline-flex items-center justify-center" aria-hidden="true">
       <svg width="104" height="104" viewBox="0 0 104 104">
-        <circle
-          cx="52"
-          cy="52"
-          r={radius}
-          fill="none"
-          stroke="#eaecf0"
-          strokeWidth="8"
-        />
+        <circle cx="52" cy="52" r={radius} fill="none" stroke="#e4e4e7" strokeWidth="8" />
         <circle
           cx="52"
           cy="52"
@@ -62,8 +55,8 @@ function ScoreRing({ score }: { score: number }) {
         />
       </svg>
       <div className="absolute text-center">
-        <div className="text-2xl font-bold text-ink-900">{score}</div>
-        <div className="text-[10px] font-medium uppercase tracking-wide text-ink-400">
+        <div className="text-2xl font-semibold text-foreground">{score}</div>
+        <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
           / 100
         </div>
       </div>
@@ -82,14 +75,14 @@ function InfoRow({
 }) {
   return (
     <div className="flex items-start gap-3">
-      <div className="mt-0.5 shrink-0 rounded-lg bg-ink-100 p-1.5 text-ink-500">
+      <div className="mt-0.5 shrink-0 rounded-md bg-muted p-1.5 text-muted-foreground">
         {icon}
       </div>
       <div className="min-w-0 flex-1">
-        <p className="text-xs font-semibold uppercase tracking-wide text-ink-400">
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
           {title}
         </p>
-        <div className="mt-0.5 text-sm text-ink-700">{children}</div>
+        <div className="mt-0.5 text-sm text-foreground/90">{children}</div>
       </div>
     </div>
   );
@@ -101,10 +94,10 @@ export function ContractSummary({ analysis }: ContractSummaryProps) {
       <div className="flex items-center gap-4">
         <ScoreRing score={analysis.overallRiskScore} />
         <div className="min-w-0">
-          <p className="text-sm font-semibold text-ink-800">
+          <p className="text-sm font-semibold text-foreground">
             {scoreLabel(analysis.overallRiskScore)}
           </p>
-          <p className="mt-1 text-xs leading-relaxed text-ink-500">
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
             Decision-support signal based on {analysis.risks.length}{' '}
             identified risk{analysis.risks.length === 1 ? '' : 's'}. Not a legal
             probability.
@@ -112,7 +105,7 @@ export function ContractSummary({ analysis }: ContractSummaryProps) {
         </div>
       </div>
 
-      <p className="text-sm leading-relaxed text-ink-700">{analysis.summary}</p>
+      <p className="text-sm leading-relaxed text-foreground/90">{analysis.summary}</p>
 
       <div className="flex flex-col gap-4">
         <InfoRow icon={<FileSignature className="size-4" aria-hidden="true" />} title="Contract type">
@@ -125,14 +118,14 @@ export function ContractSummary({ analysis }: ContractSummaryProps) {
               {analysis.parties.map((party) => (
                 <li
                   key={party}
-                  className="rounded-md bg-ink-100 px-2 py-0.5 text-xs font-medium text-ink-600"
+                  className="rounded-md bg-muted px-2 py-0.5 text-xs font-medium text-foreground"
                 >
                   {party}
                 </li>
               ))}
             </ul>
           ) : (
-            <span className="text-ink-400">Not identified</span>
+            <span className="text-muted-foreground">Not identified</span>
           )}
         </InfoRow>
 
@@ -142,28 +135,28 @@ export function ContractSummary({ analysis }: ContractSummaryProps) {
               {analysis.keyTerms.map((term) => (
                 <li
                   key={term}
-                  className="rounded-md bg-primary-50 px-2 py-0.5 text-xs font-medium text-primary-700"
+                  className="rounded-md border border-border bg-background px-2 py-0.5 text-xs font-medium text-foreground"
                 >
                   {term}
                 </li>
               ))}
             </ul>
           ) : (
-            <span className="text-ink-400">None surfaced</span>
+            <span className="text-muted-foreground">None surfaced</span>
           )}
         </InfoRow>
       </div>
 
       {analysis.recommendations.length > 0 ? (
-        <div className="rounded-xl border border-primary-200 bg-primary-50/60 p-4">
-          <p className="flex items-center gap-2 text-sm font-semibold text-primary-800">
-            <ListChecks className="size-4" aria-hidden="true" />
+        <div className="rounded-lg border border-border bg-muted/50 p-4">
+          <p className="flex items-center gap-2 text-sm font-semibold text-foreground">
+            <ListChecks className="size-4 text-primary" aria-hidden="true" />
             What to do next
           </p>
           <ul className="mt-2 flex flex-col gap-2">
             {analysis.recommendations.map((recommendation) => (
-              <li key={recommendation} className="flex items-start gap-2 text-sm text-ink-700">
-                <Star className="mt-0.5 size-3.5 shrink-0 text-primary-500" aria-hidden="true" />
+              <li key={recommendation} className="flex items-start gap-2 text-sm text-foreground/90">
+                <Star className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
                 <span>{recommendation}</span>
               </li>
             ))}

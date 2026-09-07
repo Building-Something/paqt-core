@@ -1,5 +1,6 @@
 import { useState, type DragEvent, type ChangeEvent, useRef } from 'react';
 import { FileText, UploadCloud, X } from 'lucide-react';
+import { Button } from './ui/button';
 
 interface UploadDropzoneProps {
   onFileSelected: (file: File) => void;
@@ -81,11 +82,11 @@ export function UploadDropzone({ onFileSelected, busy = false }: UploadDropzoneP
         onDragLeave={() => setDragging(false)}
         onDrop={handleDrop}
         className={[
-          'relative flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed px-6 py-12 text-center transition-colors',
+          'relative flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed px-6 py-12 text-center transition-colors',
           `${busy ? 'pointer-events-none opacity-60' : ''}`,
           dragging
-            ? 'border-primary-500 bg-primary-50'
-            : 'border-ink-300 bg-white hover:border-primary-400 hover:bg-primary-50/40',
+            ? 'border-primary bg-primary/5'
+            : 'border-border bg-card hover:border-primary/50 hover:bg-accent/40',
         ].join(' ')}
       >
         <input
@@ -97,27 +98,27 @@ export function UploadDropzone({ onFileSelected, busy = false }: UploadDropzoneP
           aria-hidden="true"
           tabIndex={-1}
         />
-        <div className="rounded-full bg-primary-100 p-3 text-primary-700">
+        <div className="rounded-full bg-muted p-3 text-primary">
           <UploadCloud className="size-7" aria-hidden="true" />
         </div>
-        <p className="mt-4 text-base font-semibold text-ink-800">
+        <p className="mt-4 text-sm font-semibold text-foreground">
           {busy ? 'Processing…' : 'Drop your contract here'}
         </p>
-        <p className="mt-1 text-sm text-ink-500">
+        <p className="mt-1 text-sm text-muted-foreground">
           or{' '}
-          <span className="font-semibold text-primary-700 underline decoration-primary-300 underline-offset-2">
+          <span className="font-medium text-primary underline decoration-primary/40 underline-offset-2">
             browse
           </span>{' '}
           for a PDF
         </p>
-        <p className="mt-3 text-xs text-ink-400">
+        <p className="mt-3 text-xs text-muted-foreground">
           Contracts are extracted in your browser; analysis runs through Paqt’s
           server.
         </p>
       </div>
 
       {rejectReason ? (
-        <div className="mt-3 flex items-start gap-2 rounded-lg bg-critical-100 px-3 py-2 text-sm text-critical-700">
+        <div className="mt-3 flex items-start gap-2 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
           <X className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
           {rejectReason}
         </div>
@@ -125,23 +126,21 @@ export function UploadDropzone({ onFileSelected, busy = false }: UploadDropzoneP
 
       {pendingFile ? (
         <div className="card mt-4 flex items-center gap-3 p-3">
-          <div className="rounded-lg bg-ink-100 p-2 text-ink-500">
+          <div className="rounded-md bg-muted p-2 text-muted-foreground">
             <FileText className="size-5" aria-hidden="true" />
           </div>
           <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-medium text-ink-800">{pendingFile.name}</p>
-            <p className="text-xs text-ink-400">
+            <p className="truncate text-sm font-medium text-foreground">{pendingFile.name}</p>
+            <p className="text-xs text-muted-foreground">
               {(pendingFile.size / 1024 / 1024).toFixed(2)} MB
             </p>
           </div>
-          <button type="button" onClick={confirm} className="btn-primary">
-            Analyze
-          </button>
+          <Button onClick={confirm}>Analyze</Button>
           <button
             type="button"
             onClick={cancel}
             aria-label="Remove selected file"
-            className="rounded-lg p-2 text-ink-400 transition-colors hover:bg-ink-100 hover:text-ink-700"
+            className="rounded-md p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           >
             <X className="size-5" aria-hidden="true" />
           </button>

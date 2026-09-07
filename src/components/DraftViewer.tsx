@@ -18,6 +18,9 @@ interface DraftViewerProps {
   onSelectRisk: (risk: ContractRisk) => void;
 }
 
+const iconButtonClass =
+  'inline-flex items-center justify-center rounded-md p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40';
+
 export function DraftViewer({
   fileName,
   markdown,
@@ -74,9 +77,9 @@ export function DraftViewer({
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-ink-200/70">
-      <div className="flex flex-wrap items-center gap-1 border-b border-ink-200 bg-white px-3 py-2">
-        <p className="mr-2 min-w-0 flex-1 truncate text-sm font-medium text-ink-800">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-muted/40">
+      <div className="flex flex-wrap items-center gap-1 border-b border-border bg-background px-3 py-2">
+        <p className="mr-2 min-w-0 flex-1 truncate text-sm font-medium text-foreground">
           {fileName}
         </p>
 
@@ -87,13 +90,13 @@ export function DraftViewer({
             title="Previous section"
             onClick={() => goToSection(currentPage - 1)}
             disabled={currentPage <= 1}
-            className="inline-flex items-center justify-center rounded-lg p-2 text-ink-600 transition-colors hover:bg-ink-100 hover:text-ink-900 disabled:cursor-not-allowed disabled:opacity-40"
+            className={iconButtonClass}
           >
             <ChevronLeft className="size-4" aria-hidden="true" />
           </button>
-          <span className="inline-flex items-center rounded-lg border border-ink-200 px-2 py-1 text-xs font-medium tabular-nums text-ink-700">
+          <span className="inline-flex items-center rounded-md border border-border px-2 py-1 text-xs font-medium tabular-nums text-muted-foreground">
             Section {currentPage}
-            <span className="text-ink-400"> / {totalPages}</span>
+            <span className="text-muted-foreground/70"> / {totalPages}</span>
           </span>
           <button
             type="button"
@@ -101,20 +104,20 @@ export function DraftViewer({
             title="Next section"
             onClick={() => goToSection(currentPage + 1)}
             disabled={currentPage >= totalPages}
-            className="inline-flex items-center justify-center rounded-lg p-2 text-ink-600 transition-colors hover:bg-ink-100 hover:text-ink-900 disabled:cursor-not-allowed disabled:opacity-40"
+            className={iconButtonClass}
           >
             <ChevronRight className="size-4" aria-hidden="true" />
           </button>
         </div>
 
-        <div className="mx-1 h-5 w-px bg-ink-200" aria-hidden="true" />
+        <div className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
 
         <button
           type="button"
           aria-label="Copy draft as Markdown"
           title="Copy draft as Markdown"
           onClick={handleCopy}
-          className="inline-flex items-center justify-center rounded-lg p-2 text-ink-600 transition-colors hover:bg-ink-100 hover:text-ink-900"
+          className={iconButtonClass}
         >
           {copied ? (
             <Check className="size-4 text-low-600" aria-hidden="true" />
@@ -127,7 +130,7 @@ export function DraftViewer({
           aria-label="Download draft as Markdown"
           title="Download draft as Markdown"
           onClick={handleDownload}
-          className="inline-flex items-center justify-center rounded-lg p-2 text-ink-600 transition-colors hover:bg-ink-100 hover:text-ink-900"
+          className={iconButtonClass}
         >
           <Download className="size-4" aria-hidden="true" />
         </button>
@@ -144,10 +147,10 @@ export function DraftViewer({
               aria-label={`Section ${section.pageNumber}: ${section.heading}`}
               data-testid={`draft-section-${section.pageNumber}`}
               className={[
-                'relative rounded-xl border bg-white p-5 shadow-card transition-shadow',
+                'relative rounded-xl border bg-card p-5 shadow-sm transition-shadow',
                 section.pageNumber === currentPage
-                  ? 'border-primary-300 ring-1 ring-primary-200'
-                  : 'border-ink-200',
+                  ? 'border-primary/60 ring-1 ring-primary/30'
+                  : 'border-border',
               ].join(' ')}
             >
               {section.pageNumber === currentPage && pageMarkers.length > 0 ? (
@@ -164,17 +167,19 @@ export function DraftViewer({
                 </div>
               ) : null}
 
-              <h2 className="mb-3 flex items-baseline gap-2 text-sm font-bold text-ink-900">
-                <span className="text-xs font-semibold tabular-nums text-ink-400">
+              <h2 className="mb-3 flex items-baseline gap-2 text-sm font-semibold text-foreground">
+                <span className="text-xs font-medium tabular-nums text-muted-foreground">
                   {section.pageNumber}
                 </span>
                 {section.heading}
               </h2>
-              <MarkdownBody>{section.text}</MarkdownBody>
+              <div className="text-foreground/90">
+                <MarkdownBody>{section.text}</MarkdownBody>
+              </div>
             </section>
           ))}
 
-          <p className="px-2 pb-2 text-xs leading-relaxed text-ink-400">
+          <p className="px-2 pb-2 text-xs leading-relaxed text-muted-foreground">
             This draft is a starting point, not legal advice. Have qualified
             counsel review it before signing.
           </p>

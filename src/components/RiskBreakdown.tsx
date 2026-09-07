@@ -28,23 +28,23 @@ export function RiskBreakdown({ risks }: RiskBreakdownProps) {
         }
         return (
           <div key={level} className="flex items-center gap-3">
-            <span className={`w-16 text-xs font-semibold ${meta.text}`}>
+            <span className={`w-16 text-xs font-medium ${meta.text}`}>
               {meta.label}
             </span>
-            <div className="h-2 flex-1 overflow-hidden rounded-full bg-ink-100">
+            <div className="h-2 flex-1 overflow-hidden rounded-full bg-muted">
               <div
                 className={`h-full rounded-full ${meta.chip}`}
                 style={{ width: `${(count / total) * 100}%` }}
               />
             </div>
-            <span className="w-6 text-right text-xs font-medium tabular-nums text-ink-500">
+            <span className="w-6 text-right text-xs font-medium tabular-nums text-muted-foreground">
               {count}
             </span>
           </div>
         );
       })}
       {risks.length === 0 ? (
-        <p className="text-xs text-ink-400">No risks identified.</p>
+        <p className="text-xs text-muted-foreground">No risks identified.</p>
       ) : null}
     </div>
   );

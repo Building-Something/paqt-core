@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { ArrowRight, FileSearch, ScrollText, Scale } from 'lucide-react';
 import { Disclaimer } from '../components/Disclaimer';
+import { Card, CardContent } from '../components/ui/card';
 
 const PRINCIPLES = [
   {
@@ -28,16 +29,16 @@ export function AboutPage() {
     <div className="mx-auto max-w-3xl px-4 py-14">
       <Link
         to="/"
-        className="inline-flex items-center gap-1.5 text-sm font-medium text-primary-700 hover:text-primary-800"
+        className="inline-flex items-center gap-1.5 text-sm font-medium text-foreground transition-colors hover:text-primary"
       >
         <ArrowRight className="size-4 rotate-180" aria-hidden="true" />
         Back home
       </Link>
 
-      <h1 className="mt-6 text-4xl font-bold tracking-tight text-ink-900">
+      <h1 className="mt-6 text-4xl font-semibold tracking-tight text-foreground">
         About Paqt
       </h1>
-      <p className="mt-4 text-lg leading-relaxed text-ink-600">
+      <p className="mt-4 text-lg leading-relaxed text-muted-foreground">
         Paqt is the contract decision layer before you sign. It helps founders,
         freelancers, and small teams understand what they’re agreeing to without
         paying for a full legal review every time.
@@ -45,25 +46,27 @@ export function AboutPage() {
 
       <div className="mt-10 space-y-4">
         {PRINCIPLES.map((principle) => (
-          <div key={principle.title} className="card flex items-start gap-4 p-6">
-            <div className="rounded-lg bg-primary-100 p-2 text-primary-700">
-              <principle.icon className="size-5" aria-hidden="true" />
-            </div>
-            <div>
-              <h2 className="text-base font-semibold text-ink-900">{principle.title}</h2>
-              <p className="mt-1.5 text-sm leading-relaxed text-ink-600">
-                {principle.description}
-              </p>
-            </div>
-          </div>
+          <Card key={principle.title}>
+            <CardContent className="flex items-start gap-4 p-6">
+              <div className="rounded-lg bg-muted p-2 text-primary">
+                <principle.icon className="size-5" aria-hidden="true" />
+              </div>
+              <div>
+                <h2 className="text-base font-semibold text-foreground">
+                  {principle.title}
+                </h2>
+                <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
+                  {principle.description}
+                </p>
+              </div>
+            </CardContent>
+          </Card>
         ))}
       </div>
 
-      <div className="mt-10 rounded-2xl border border-primary-200 bg-primary-50/60 p-6">
-        <h2 className="text-lg font-semibold text-ink-900">
-          The distinction
-        </h2>
-        <p className="mt-2 text-sm leading-relaxed text-ink-700">
+      <div className="mt-10 rounded-xl border border-primary/20 bg-primary/5 p-6">
+        <h2 className="text-lg font-semibold text-foreground">The distinction</h2>
+        <p className="mt-2 text-sm leading-relaxed text-foreground/80">
           Generic summarizers produce prose. Paqt produces decisions you can
           inspect: what matters, where it lives in the document, why it matters,
           and what you should do next. That difference is the whole point.

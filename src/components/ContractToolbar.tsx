@@ -47,8 +47,8 @@ function ToolButton({
         event.preventDefault();
         onClick();
       }}
-      className={`flex h-8 w-8 items-center justify-center rounded-md text-ink-600 transition-colors ${
-        active ? 'bg-primary-600 text-white' : 'hover:bg-ink-100'
+      className={`flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors ${
+        active ? 'bg-primary text-primary-foreground hover:bg-primary/90' : 'hover:bg-accent hover:text-foreground'
       } disabled:cursor-not-allowed disabled:opacity-30`}
     >
       {children}
@@ -57,7 +57,7 @@ function ToolButton({
 }
 
 function Divider() {
-  return <span aria-hidden="true" className="mx-1 h-5 w-px shrink-0 bg-ink-200" />;
+  return <span aria-hidden="true" className="mx-1 h-5 w-px shrink-0 bg-border" />;
 }
 
 export function ContractToolbar({ editor }: ContractToolbarProps) {
@@ -66,7 +66,7 @@ export function ContractToolbar({ editor }: ContractToolbarProps) {
   }
   const headingActive = (level: 1 | 2 | 3) => editor.isActive('heading', { level });
   return (
-    <div className="no-scrollbar flex shrink-0 items-center gap-1 overflow-x-auto border-b border-ink-200 bg-ink-100/70 px-3 py-2" role="toolbar" aria-label="Contract formatting">
+    <div className="no-scrollbar flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border bg-muted/40 px-3 py-2" role="toolbar" aria-label="Contract formatting">
       <ToolButton label="Undo" disabled={!editor.can().undo()} onClick={() => editor.chain().focus().undo().run()}>
         <Undo2 size={16} />
       </ToolButton>

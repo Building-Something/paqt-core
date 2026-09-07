@@ -54,8 +54,8 @@ export function RiskList({ risks, selectedRiskId, onSelectRisk }: RiskListProps)
             className={[
               'rounded-full px-3 py-1 text-xs font-medium transition-colors',
               filter === option.value
-                ? 'bg-ink-800 text-white'
-                : 'bg-ink-100 text-ink-600 hover:bg-ink-200',
+                ? 'bg-primary text-primary-foreground shadow-sm'
+                : 'text-muted-foreground hover:bg-accent hover:text-foreground',
             ].join(' ')}
           >
             {option.label}

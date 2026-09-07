@@ -15,6 +15,8 @@ import { formatRelativeTime, type HistoryEntry } from '../services/historyServic
 import { EmptyState } from '../components/EmptyState';
 import { Disclaimer } from '../components/Disclaimer';
 import { ScoreBadge } from '../components/ScoreBadge';
+import { Button } from '../components/ui/button';
+import { Card } from '../components/ui/card';
 
 function StatCard({
   icon: Icon,
@@ -28,16 +30,18 @@ function StatCard({
   hint: string;
 }) {
   return (
-    <div className="card flex items-start gap-3 p-4">
-      <div className="rounded-lg bg-primary-50 p-2 text-primary-700">
+    <Card className="flex items-start gap-3 p-4">
+      <div className="rounded-md bg-muted p-2 text-muted-foreground">
         <Icon className="size-4" aria-hidden="true" />
       </div>
       <div className="min-w-0">
-        <p className="truncate text-2xl font-bold tabular-nums text-ink-900">{value}</p>
-        <p className="text-xs font-medium text-ink-500">{label}</p>
-        <p className="mt-0.5 text-[11px] text-ink-400">{hint}</p>
+        <p className="truncate text-2xl font-semibold tabular-nums tracking-tight text-foreground">
+          {value}
+        </p>
+        <p className="text-xs font-medium text-muted-foreground">{label}</p>
+        <p className="mt-0.5 text-[11px] text-muted-foreground/70">{hint}</p>
       </div>
-    </div>
+    </Card>
   );
 }
 
@@ -67,13 +71,9 @@ function ActivityRow({
           }
         }}
         aria-label={`Open ${entry.name}`}
-        className="group flex cursor-pointer items-center gap-3 rounded-xl border border-ink-200 bg-white px-4 py-3 transition-colors hover:border-primary-300 hover:bg-primary-50/40"
+        className="group flex cursor-pointer items-center gap-3 rounded-lg border border-border bg-card px-4 py-3 shadow-sm transition-colors hover:bg-accent/60"
       >
-        <div
-          className={`rounded-lg p-2 ${
-            isDraft ? 'bg-primary-100 text-primary-700' : 'bg-ink-100 text-ink-500'
-          }`}
-        >
+        <div className={`rounded-md p-2 ${isDraft ? 'bg-muted text-primary' : 'bg-muted text-muted-foreground'}`}>
           {isDraft ? (
             <FilePenLine className="size-4" aria-hidden="true" />
           ) : (
@@ -81,18 +81,18 @@ function ActivityRow({
           )}
         </div>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-semibold text-ink-900">{entry.name}</p>
-          <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-500">
+          <p className="truncate text-sm font-medium text-foreground">{entry.name}</p>
+          <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
             <span>{formatRelativeTime(entry.updatedAt)}</span>
             {!isDraft && risks > 0 ? (
-              <span className="text-ink-400">
+              <span className="text-muted-foreground/70">
                 {risks} risk{risks === 1 ? '' : 's'}
               </span>
             ) : null}
             {!isDraft && score !== null ? (
               <ScoreBadge score={score} />
             ) : isDraft && entry.sectionCount ? (
-              <span className="text-ink-400">
+              <span className="text-muted-foreground/70">
                 {entry.sectionCount} section{entry.sectionCount === 1 ? '' : 's'}
               </span>
             ) : null}
@@ -105,7 +105,7 @@ function ActivityRow({
             onDelete(entry.id);
           }}
           aria-label={`Delete ${entry.name}`}
-          className="shrink-0 rounded-lg p-2 text-ink-400 transition-colors hover:bg-critical-100 hover:text-critical-700"
+          className="shrink-0 rounded-md p-2 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
         >
           <Trash2 className="size-4" aria-hidden="true" />
         </button>
@@ -158,49 +158,53 @@ export function DashboardPage() {
     <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6 sm:py-12">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <p className="text-sm font-medium text-primary-700">
-            Contract workspace
-          </p>
-          <h1 className="mt-1 text-3xl font-bold tracking-tight text-ink-900">
+          <p className="text-sm font-medium text-muted-foreground">Contract workspace</p>
+          <h1 className="mt-1 text-3xl font-semibold tracking-tight text-foreground">
             Review, draft, decide.
           </h1>
-          <p className="mt-2 max-w-xl text-sm leading-relaxed text-ink-600">
+          <p className="mt-2 max-w-xl text-sm leading-relaxed text-muted-foreground">
             Analyze incoming contracts for risks, or compose agreements from a
             plain-English brief — then send them through the same review
             pipeline.
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Link to="/generate" className="btn-secondary">
-            <FilePenLine className="size-4" aria-hidden="true" />
-            Compose
-          </Link>
-          <Link to="/analyze" className="btn-primary">
-            <ScanSearch className="size-4" aria-hidden="true" />
-            Analyze
-          </Link>
+          <Button variant="outline" asChild>
+            <Link to="/generate">
+              <FilePenLine className="size-4" aria-hidden="true" />
+              Compose
+            </Link>
+          </Button>
+          <Button asChild>
+            <Link to="/analyze">
+              <ScanSearch className="size-4" aria-hidden="true" />
+              Analyze
+            </Link>
+          </Button>
         </div>
       </div>
 
       {fileName || record ? (
-        <div className="mt-6 flex flex-wrap items-center gap-3 rounded-xl border border-primary-200 bg-primary-50/70 px-4 py-3">
+        <div className="mt-6 flex flex-wrap items-center gap-3 rounded-lg border border-border bg-card px-4 py-3 shadow-sm">
           <div className="flex min-w-0 items-center gap-2.5">
-            <div className="rounded-lg bg-primary-100 p-2 text-primary-700">
+            <div className="rounded-md bg-muted p-2 text-primary">
               <ScanSearch className="size-4" aria-hidden="true" />
             </div>
             <div className="min-w-0">
-              <p className="truncate text-sm font-semibold text-ink-900">
+              <p className="truncate text-sm font-medium text-foreground">
                 {record?.name ?? fileName}
               </p>
-              <p className="text-xs text-ink-500">
+              <p className="text-xs text-muted-foreground">
                 {busy ? 'Analysis in progress…' : 'Analysis session ready to review'}
               </p>
             </div>
           </div>
-          <Link to="/analysis" className="btn-primary ml-auto">
-            Open workspace
-            <ArrowRight className="size-4" aria-hidden="true" />
-          </Link>
+          <Button asChild className="ml-auto">
+            <Link to="/analysis">
+              Open workspace
+              <ArrowRight className="size-4" aria-hidden="true" />
+            </Link>
+          </Button>
         </div>
       ) : null}
 
@@ -219,67 +223,75 @@ export function DashboardPage() {
 
       <div className="mt-10 grid gap-6 lg:grid-cols-[1fr_1.6fr]">
         <section>
-          <h2 className="text-base font-semibold text-ink-900">Start something</h2>
-          <div className="mt-4 flex flex-col gap-4">
-            <div className="card flex flex-col gap-4 p-5">
-              <div className="rounded-xl border border-ink-100 bg-ink-50/60 p-4">
-                <p className="flex items-center gap-2 text-sm font-semibold text-ink-900">
-                  <ScanSearch className="size-4 text-primary-700" aria-hidden="true" />
-                  Analyze a contract
-                </p>
-                <p className="mt-1.5 text-sm leading-relaxed text-ink-600">
-                  Upload a PDF and Paqt flags the clauses worth your attention,
-                  with the exact page and quote behind each finding.
-                </p>
-                <Link to="/analyze" className="btn-primary mt-4">
-                  Upload a PDF
-                  <ArrowRight className="size-4" aria-hidden="true" />
-                </Link>
+          <h2 className="text-sm font-semibold text-foreground">Start something</h2>
+          <div className="mt-3 flex flex-col gap-3">
+            <Card className="p-5">
+              <div className="flex items-start gap-3">
+                <div className="rounded-md bg-muted p-2 text-primary">
+                  <ScanSearch className="size-4" aria-hidden="true" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-foreground">Analyze a contract</p>
+                  <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+                    Upload a PDF and Paqt flags the clauses worth your attention,
+                    with the exact page and quote behind each finding.
+                  </p>
+                  <Button asChild className="mt-4">
+                    <Link to="/analyze">
+                      Upload a PDF
+                      <ArrowRight className="size-4" aria-hidden="true" />
+                    </Link>
+                  </Button>
+                </div>
               </div>
-            </div>
+            </Card>
 
-            <div className="card flex flex-col gap-4 p-5">
-              <div className="rounded-xl border border-primary-200 bg-primary-50/60 p-4">
-                <p className="flex items-center gap-2 text-sm font-semibold text-ink-900">
-                  <FilePenLine className="size-4 text-primary-700" aria-hidden="true" />
-                  Compose a contract
-                </p>
-                <p className="mt-1.5 text-sm leading-relaxed text-ink-600">
-                  Describe the deal in plain English. Paqt asks clarifying
-                  questions, drafts the agreement, and rewrites it from your
-                  feedback — then analyzes it for risks.
-                </p>
-                <Link to="/generate" className="btn-primary mt-4">
-                  Start drafting
-                  <ArrowRight className="size-4" aria-hidden="true" />
-                </Link>
+            <Card className="p-5">
+              <div className="flex items-start gap-3">
+                <div className="rounded-md bg-muted p-2 text-primary">
+                  <FilePenLine className="size-4" aria-hidden="true" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-foreground">Compose a contract</p>
+                  <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+                    Describe the deal in plain English. Paqt asks clarifying
+                    questions, drafts the agreement, and rewrites it from your
+                    feedback — then analyzes it for risks.
+                  </p>
+                  <Button asChild className="mt-4">
+                    <Link to="/generate">
+                      Start drafting
+                      <ArrowRight className="size-4" aria-hidden="true" />
+                    </Link>
+                  </Button>
+                </div>
               </div>
-            </div>
+            </Card>
           </div>
         </section>
 
         <section>
           <div className="flex items-center justify-between gap-3">
-            <h2 className="text-base font-semibold text-ink-900">Recent activity</h2>
+            <h2 className="text-sm font-semibold text-foreground">Recent activity</h2>
             {entries.length > 0 ? (
               <button
                 type="button"
                 onClick={clearAll}
-                className="text-xs font-medium text-ink-400 transition-colors hover:text-critical-700"
+                className="text-xs font-medium text-muted-foreground transition-colors hover:text-destructive"
               >
                 Clear history
               </button>
             ) : null}
           </div>
 
-          <div className="mt-4">
+          <div className="mt-3">
             {recent.length === 0 ? (
               <EmptyState
                 title="Nothing here yet"
                 description="Analyses you run and contracts you compose will appear here for quick reopening, stored only in your browser."
               />
             ) : (
-              <ul className="flex flex-col gap-3">
+              <ul className="flex flex-col gap-2">
                 {recent.map((entry) => (
                   <ActivityRow
                     key={entry.id}
@@ -294,7 +306,7 @@ export function DashboardPage() {
         </section>
       </div>
 
-      <div className="mt-12 border-t border-ink-200 pt-6">
+      <div className="mt-12 border-t border-border pt-6">
         <Disclaimer />
       </div>
     </div>
