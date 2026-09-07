@@ -12,6 +12,7 @@ export interface HistoryEntry {
   sectionCount?: number;
   draftBrief?: string;
   draftMarkdown?: string;
+  draftDoc?: string;
   analysis?: ContractAnalysis;
 }
 

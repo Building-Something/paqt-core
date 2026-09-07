@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft,
   Check,
+  FileDown,
   FilePenLine,
   Loader2,
   RefreshCcw,
@@ -12,16 +13,22 @@ import {
 } from 'lucide-react';
 import { askDraftingQuestions, generateContractDraft, reviseContractDraft } from '../services/draftService';
 import { splitDraftIntoSections } from '../utils/draft';
-import { downloadTextFile } from '../services/exportService';
-import { groqErrorMessage, sanitizedFileName } from '../utils/risks';
+import { exportContractPdf } from '../services/pdfExportService';
+import { groqErrorMessage } from '../utils/risks';
 import { useAnalysis } from '../contexts/AnalysisContext';
 import { Disclaimer } from '../components/Disclaimer';
-import { MarkdownBody } from '../components/MarkdownBody';
 import {
-  createHistoryId,
-  getHistoryEntry,
-  upsertHistoryEntry,
-} from '../services/historyService';
+  type ContractDocNode,
+  EMPTY_DOCUMENT,
+  docContainsSignatures,
+  docToMarkdown,
+  markdownToDoc,
+} from '../utils/contractDocument';
+import { createHistoryId, getHistoryEntry, upsertHistoryEntry } from '../services/historyService';
+
+const ContractEditor = lazy(() =>
+  import('../components/ContractEditor').then((module) => ({ default: module.ContractEditor })),
+);
 
 const EXAMPLES = [
   'Create a $5,000 freelance developer contract for building a landing page over 4 weeks, net-30 payment schedule, client owns the final code.',
@@ -58,6 +65,33 @@ function errorMessage(error: unknown): string {
   return 'Something went wrong while drafting. Please try again.';
 }
 
+function SignaturePreview() {
+  const fields = (label: string) => (
+    <div className="space-y-6">
+      <p className="text-sm font-semibold tracking-wide text-ink-800">{label}</p>
+      {['By:', 'Name:', 'Title:', 'Date:'].map((field) => (
+        <div key={field}>
+          <p className="text-xs text-ink-600">{field}</p>
+          <div className="mt-1 border-b border-dotted border-ink-400" />
+        </div>
+      ))}
+    </div>
+  );
+  return (
+    <div className="mx-auto max-w-[8.25in] px-6 py-10 sm:px-10">
+      <div className="border-t border-ink-200 pt-8 text-ink-800">
+        <p className="text-sm text-ink-600">
+          Signature lines are rendered automatically in the PDF export.
+        </p>
+      </div>
+      <div className="mt-10 grid grid-cols-2 gap-12">
+        {fields('CLIENT')}
+        {fields('PROVIDER')}
+      </div>
+    </div>
+  );
+}
+
 export function GeneratePage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -67,14 +101,18 @@ export function GeneratePage() {
   const [brief, setBrief] = useState('');
   const [questions, setQuestions] = useState<string[]>([]);
   const [answers, setAnswers] = useState<Record<number, string>>({});
-  const [draft, setDraft] = useState('');
+  const [doc, setDoc] = useState<ContractDocNode>(EMPTY_DOCUMENT);
+  const [contentKey, setContentKey] = useState(0);
   const [revision, setRevision] = useState('');
   const [working, setWorking] = useState(false);
   const [busyMessage, setBusyMessage] = useState('');
   const [error, setError] = useState<string | null>(null);
   const draftIdRef = useRef<string | null>(null);
+  const persistTimer = useRef<number | null>(null);
 
-  const sections = useMemo(() => (draft ? splitDraftIntoSections(draft) : []), [draft]);
+  const markdown = useMemo(() => docToMarkdown(doc), [doc]);
+  const hasSignatures = useMemo(() => docContainsSignatures(doc), [doc]);
+  const sectionCount = useMemo(() => (markdown ? splitDraftIntoSections(markdown).length : 0), [markdown]);
 
   useEffect(() => {
     const id = searchParams.get('draft');
@@ -82,34 +120,65 @@ export function GeneratePage() {
       return;
     }
     const entry = getHistoryEntry(id);
-    if (!entry || entry.kind !== 'draft' || !entry.draftMarkdown) {
+    if (!entry || entry.kind !== 'draft') {
       return;
     }
+    const loadedDoc = entry.draftDoc
+      ? (JSON.parse(entry.draftDoc) as ContractDocNode)
+      : markdownToDoc(entry.draftMarkdown ?? '');
     draftIdRef.current = id;
     setBrief(entry.draftBrief ?? entry.name);
-    setDraft(entry.draftMarkdown);
+    setDoc(loadedDoc);
+    setContentKey((current) => current + 1);
     setPhase('draft');
     setError(null);
   }, [searchParams]);
 
-  function draftEntryId(): string {
-    if (!draftIdRef.current) {
-      draftIdRef.current = createHistoryId('draft');
-    }
-    return draftIdRef.current;
+function draftEntryIdOrCreate(): string {
+  if (!draftIdRef.current) {
+    draftIdRef.current = createHistoryId('draft');
   }
+  return draftIdRef.current;
+}
 
-  function persistDraft(text: string) {
+const persistDraft = useCallback(
+  (text: string, docJson: string) => {
     upsertHistoryEntry({
-      id: draftEntryId(),
+      id: draftEntryIdOrCreate(),
       kind: 'draft',
       name: draftSlug(brief),
       createdAt: Date.now(),
       updatedAt: Date.now(),
       draftBrief: brief,
       draftMarkdown: text,
+      draftDoc: docJson,
       sectionCount: splitDraftIntoSections(text).length,
     });
+  },
+  [brief],
+);
+
+  useEffect(() => {
+    if (phase !== 'draft' || !markdown.trim()) {
+      return;
+    }
+    if (persistTimer.current !== null) {
+      window.clearTimeout(persistTimer.current);
+    }
+    persistTimer.current = window.setTimeout(() => {
+      persistDraft(markdown, JSON.stringify(doc));
+    }, 800);
+    return () => {
+      if (persistTimer.current !== null) {
+        window.clearTimeout(persistTimer.current);
+      }
+    };
+  }, [persistDraft, markdown, doc, phase, brief]);
+
+  function applyDraft(text: string) {
+    setDoc(markdownToDoc(text));
+    setContentKey((current) => current + 1);
+    persistDraft(text, JSON.stringify(markdownToDoc(text)));
   }
 
   function resetToBrief() {
@@ -117,7 +186,7 @@ export function GeneratePage() {
     setPhase('brief');
     setQuestions([]);
     setAnswers({});
-    setDraft('');
+    setDoc(EMPTY_DOCUMENT);
     setRevision('');
     setError(null);
     setWorking(false);
@@ -129,9 +198,11 @@ export function GeneratePage() {
     setError(null);
     try {
       const text = await generateContractDraft(brief, suppliedAnswers);
-      setDraft(text);
+      if (!text.trim()) {
+        throw new Error('empty-draft');
+      }
+      applyDraft(text);
       setPhase('draft');
-      persistDraft(text);
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (caught) {
       setError(errorMessage(caught));
@@ -166,16 +237,15 @@ export function GeneratePage() {
 
   async function handleRevise() {
     const instruction = revision.trim();
-    if (!instruction || working) {
+    if (!instruction || working || !markdown.trim()) {
       return;
     }
     setWorking(true);
     setBusyMessage('Revising the agreement…');
     setError(null);
     try {
-      const text = await reviseContractDraft(brief, answers, draft, instruction);
-      setDraft(text);
-      persistDraft(text);
+      const text = await reviseContractDraft(brief, answers, markdown, instruction);
+      applyDraft(text);
       setRevision('');
       window.scrollTo({ top: 250, behavior: 'smooth' });
     } catch (caught) {
@@ -186,15 +256,28 @@ export function GeneratePage() {
   }
 
   async function handleAnalyze() {
-    if (!draft.trim() || working) {
+    if (!markdown.trim() || working) {
       return;
     }
-    await beginWithText(`${draftSlug(brief)} (generated)`, draft);
+    await beginWithText(`${draftSlug(brief)} (generated)`, markdown);
     navigate('/analysis');
   }
 
-  function handleDownload() {
-    downloadTextFile(sanitizedFileName(draftSlug(brief), 'draft.md'), draft, 'text/markdown;charset=utf-8');
+  async function handleExportPdf() {
+    if (!markdown.trim() || working) {
+      return;
+    }
+    setWorking(true);
+    setBusyMessage('Preparing your PDF…');
+    setError(null);
+    try {
+      await exportContractPdf(doc, { fileName: draftSlug(brief) });
+    } catch (caught) {
+      setError('The PDF could not be generated. Please try again.');
+      console.error('PDF export failed', caught);
+    } finally {
+      setWorking(false);
+    }
   }
 
   const questionCount = questions.length;
@@ -202,7 +285,7 @@ export function GeneratePage() {
   const steps = [
     { key: 'brief', label: 'Describe the deal in plain English' },
     { key: 'questions', label: 'Answer a few targeted details' },
-    { key: 'draft', label: 'Review, revise, and download' },
+    { key: 'draft', label: 'Edit inline, revise, and export as PDF' },
   ] as const;
 
   function stepStatus(index: number): 'done' | 'current' | 'pending' {
@@ -229,8 +312,8 @@ export function GeneratePage() {
         </h1>
         <p className="mx-auto mt-3 max-w-2xl text-base leading-relaxed text-ink-600">
           Describe what you need and Paqt will ask a few targeted questions,
-          then draft a proper contractual agreement you can revise, download,
-          and analyze for risks.
+          then draft a properly formatted contract you can edit inline like a
+          word processor, export as a PDF, and analyze for risks.
         </p>
       </div>
 
@@ -404,14 +487,24 @@ export function GeneratePage() {
                     Your draft is ready
                   </p>
                   <p className="text-xs text-ink-500">
-                    {sections.length} section{sections.length === 1 ? '' : 's'} ·
-                    revise, download, or analyze it for risks.
+                    {sectionCount} section{sectionCount === 1 ? '' : 's'} ·
+                    edit inline, then export or analyze. Every change is saved
+                    to history automatically.
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <button type="button" onClick={handleDownload} className="btn-secondary">
-                    <FilePenLine className="size-4" aria-hidden="true" />
-                    Download .md
+                  <button
+                    type="button"
+                    onClick={handleExportPdf}
+                    disabled={working || !markdown.trim()}
+                    className="btn-secondary"
+                  >
+                    {working && busyMessage.startsWith('Preparing') ? (
+                      <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                    ) : (
+                      <FileDown className="size-4" aria-hidden="true" />
+                    )}
+                    Export PDF
                   </button>
                   <button
                     type="button"
@@ -479,27 +572,20 @@ export function GeneratePage() {
           ) : null}
         </div>
 
-        {/* Preview column */}
+        {/* Preview / editor column */}
         <div className="min-w-0 order-1 lg:sticky lg:top-4">
           {phase === 'draft' ? (
-            <div className="rounded-2xl border border-ink-200 bg-ink-200/40 p-3 sm:p-5">
-              <div className="mx-auto max-w-3xl space-y-5">
-                {sections.map((section) => (
-                  <section
-                    key={section.pageNumber}
-                    className="rounded-xl border border-ink-200 bg-white p-5 shadow-card"
-                    aria-label={`Section ${section.pageNumber}: ${section.heading}`}
-                  >
-                    <h2 className="mb-3 flex items-baseline gap-2 text-sm font-bold text-ink-900">
-                      <span className="text-xs font-semibold tabular-nums text-ink-400">
-                        {section.pageNumber}
-                      </span>
-                      {section.heading}
-                    </h2>
-                    <MarkdownBody>{section.text}</MarkdownBody>
-                  </section>
-                ))}
-              </div>
+            <div className="overflow-hidden rounded-2xl border border-ink-200 bg-white shadow-card">
+              <Suspense
+                fallback={
+                  <div className="flex h-96 items-center justify-center">
+                    <Loader2 className="size-6 animate-spin text-primary-600" aria-hidden="true" />
+                  </div>
+                }
+              >
+                <ContractEditor doc={doc} contentKey={contentKey} onChange={setDoc} />
+              </Suspense>
+              {hasSignatures ? <SignaturePreview /> : null}
             </div>
           ) : (
             <div className="rounded-2xl border border-ink-200 bg-white p-8 shadow-card">
@@ -511,8 +597,8 @@ export function GeneratePage() {
                   Your agreement will appear here
                 </h2>
                 <p className="max-w-sm text-sm leading-relaxed text-ink-500">
-                  Paqt previews the drafted agreement side by side as you work
-                  through the steps.
+                  Paqt drafts the agreement side by side as you work through
+                  the steps, ready for direct editing.
                 </p>
               </div>
               <ol className="mt-8 space-y-3">
@@ -553,7 +639,8 @@ export function GeneratePage() {
               </ol>
               <div className="mt-8 rounded-xl border border-primary-200 bg-primary-50/60 px-4 py-3 text-sm text-primary-900">
                 When the draft is ready, follow-up changes are applied to the
-                whole document — not find-and-replace.
+                whole document — not find-and-replace — and you can export a
+                professionally formatted PDF.
               </div>
             </div>
           )}

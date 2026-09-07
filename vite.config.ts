@@ -11,6 +11,18 @@ function manualChunks(id: string): string | undefined {
   if (id.includes('react-markdown') || id.includes('micromark')) {
     return 'markdown';
   }
+  if (
+    id.includes('@tiptap') ||
+    id.includes('@remirror') ||
+    id.includes('prosemirror') ||
+    id.includes('@lezer') ||
+    id.includes('w3c-keyname')
+  ) {
+    return 'tiptap';
+  }
+  if (id.includes('pdfmake') || id.includes('pdfkit') || id.includes('@foliojs-fork') || id.includes('linebreak')) {
+    return 'pdfmake';
+  }
   return undefined;
 }
 
@@ -29,7 +41,7 @@ export default defineConfig({
     target: 'es2020',
     outDir: 'dist',
     sourcemap: false,
-    chunkSizeWarningLimit: 800,
+    chunkSizeWarningLimit: 1000,
     rollupOptions: {
       output: {
         manualChunks,

@@ -11,7 +11,7 @@ The app is organized as a contract workspace with a sidebar shell:
 - **Dashboard** (`/`) — stats, quick actions, and recent activity across analyses and drafts. History lives in `localStorage` (`paqt.history.v1`) and is never sent to the server.
 - **Analyze** (`/analyze`) — upload a PDF for a risk review, or reopen past reviews from browser history.
 - **Workspace** (`/analysis?id=<history-id>`) — the full-width three-zone review: decision brief + risk list, document viewer (PDF or generated-draft sections), and the contract assistant. File analyses reopen as a read-only archive; generated-draft analyses re-run the review from the stored markdown.
-- **Compose** (`/generate`) — a horizontal split view: the composer on the right (brief → clarifying questions → revise), the live agreement preview on the left. Drafts are persisted to browser history and can be reopened with `/generate?draft=<history-id>`.
+- **Compose** (`/generate`) — a horizontal split view: the composer on the right (brief → clarifying questions → revise), and a Google-Docs-style rich text editor on the left where the drafted agreement is directly editable and automatically saved. One click exports a professionally formatted legal PDF. Drafts persist to browser history and reopen with `/generate?draft=<history-id>`.
 
 ## Quick start
 
@@ -54,17 +54,23 @@ server/               Express server (Node, no build step)
   dev.mjs             dev bootstrap (Vite + API)
 src/
   main.tsx, App.tsx   entry + routes; AnalysisProvider wraps the app
-  components/         sidebar shell, three-zone workspace, markdown, chat, dropzone…
+  components/         sidebar shell, three-zone workspace, markdown, chat, dropzone,
+                      ContractEditor + ContractToolbar (TipTap rich text), …
   pages/              Dashboard, AnalyzeHub, Analysis (workspace), Generate, About, Privacy
   contexts/           AnalysisContext — session state, pipeline, chat, history record
   services/           pdfService (pdf.js extraction), groqService (chat + batch analyze),
                       draftService (ask/generate/revise), historyService (localStorage),
-                      exportService (downloads)
+                      exportService (downloads), pdfExportService (PDF via pdfmake)
   hooks/              useServerHealth, useHistory (live subscription to history)
-  utils/              batching, risk normalization/dedup/scoring, draft sectioning, JSON parsing
+  utils/              batching, risk normalization/dedup/scoring, draft sectioning,
+                      contractDocument (markdown <-> editor JSON + pdfmake doc-definition),
+                      JSON parsing
   types/              shared types (risk, analysis, session, progress…)
+public/fonts/         Liberation Serif TTFs (on-screen editor + embedded in PDF exports)
 scripts/
   verify-core.ts      browser-free assertion suite for the core logic (npx tsx)
+  verify-compose.ts   markdown <-> editor JSON round-trips + PDF doc-definition checks
+  verify-pdf.ts       end-to-end pdfmake render (multi-page PDF with embedded fonts)
 instructions/         product/architecture specs the implementation was built against
 ```
 
@@ -83,17 +89,18 @@ All AI configuration (model, key, timeout, reasoning prompts) lives on the serve
 `/generate` runs a small agentic loop:
 
 1. **Brief** → the drafting service asks a few targeted clarifying questions.
-2. **Questions** → answers (or skips) → a full Markdown agreement with standard sections and `[Placeholders]` for unknown legal facts.
-3. **Draft** → Markdown is split into numbered sections (`src/utils/draft.ts`), rendered with `MarkdownBody` (react-markdown + remark-gfm: tables, headings, lists, code), and shown in the preview pane.
-4. **Revise** → a natural-language instruction rewrites the whole agreement consistently; the draft entry is updated in history.
-5. **Analyze for risks** → the sections become analysis pages and run through the same review pipeline (`beginWithText`).
+2. **Questions** → answers (or skips) → a full legal-style Markdown agreement with numbered sections (`## 1. …`, `### 1.1 …`), WHEREAS recitals, placeholder brackets like `[Client Full Legal Name]`, and a `## SIGNATURES` section (`src/services/draftService.ts`).
+3. **Draft** → Markdown is converted to TipTap editor JSON (`markdownToDoc` in `src/utils/contractDocument.ts`) and opened in a rich text editor (StarterKit + Underline + TextAlign) on the left, styled like a legal document in `Liberation Serif`. Edits flow back through `docToMarkdown` and are autosaved to history (debounced), plus persisted to `draftDoc` so the exact formatting is preserved on reopen.
+4. **Revise** → a natural-language instruction rewrites the whole agreement consistently.
+5. **Export PDF** → `pdfExportService` loads the Liberation Serif TTFs (TTF → base64 → pdfmake vfs), builds a letter-size legal layout (`buildContractPdfDoc`: margins, title block, justified sections, uppercase section headings, page footer, auto-generated signature lines after IN WITNESS WHEREOF), and downloads the PDF.
+6. **Analyze for risks** → the live Markdown of the draft becomes analysis pages and runs through the same review pipeline (`beginWithText`).
 
 ## Client-side history
 
 `src/services/historyService.ts` stores up to 40 entries under `paqt.history.v1`:
 
 - `kind: 'analysis'` — the full `ContractAnalysis` payload (summary, score, risks, recommendations) plus `pageCount`; generated-draft analyses also store the draft markdown.
-- `kind: 'draft'` — brief, markdown, and section count for composition.
+- `kind: 'draft'` — brief, markdown, editor JSON (`draftDoc`, optional for older entries), and section count for composition.
 
 Entries are written on analysis completion and draft generation, and are re-opened via query params (`?id=`, `?draft=`). No contract text or documents are persisted server-side. A tiny pub/sub (`subscribeHistory`) keeps dashboard/analyze lists live; `useHistory` wraps it in a hook.
 
@@ -111,7 +118,9 @@ curl http://localhost:3001/analyze         # SPA fallback
 npm run lint
 npx tsc --noEmit -p tsconfig.app.json      # strict type-check
 npm run build
-npx tsx scripts/verify-core.ts             # browser-free core-logic assertions (ALL PASS)
+npx tsx scripts/verify-core.ts             # core-logic assertions (ALL PASS)
+npx tsx scripts/verify-compose.ts          # markdown <-> editor JSON / PDF def checks
+npx tsx scripts/verify-pdf.ts              # end-to-end pdfmake render (multi-page PDF)
 ```
 
 ## Deployment
