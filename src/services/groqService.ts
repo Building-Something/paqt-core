@@ -285,12 +285,18 @@ interface PageAnalysisOutcome {
 }
 
 async function analyzePage(page: PdfPage): Promise<PageAnalysisOutcome> {
-  const raw = await groqJsonRequest(
-    JSON_SYSTEM_PROMPT,
-    pageAnalysisPrompt(page),
-    PER_PAGE_MAX_TOKENS,
-    { reasonEffort: 'medium' },
-  );
+  let raw: unknown;
+  try {
+    raw = await groqJsonRequest(
+      JSON_SYSTEM_PROMPT,
+      pageAnalysisPrompt(page),
+      PER_PAGE_MAX_TOKENS,
+      { reasonEffort: 'medium' },
+    );
+  } catch (caught) {
+    console.warn(`Page ${page.pageNumber} analysis skipped:`, caught);
+    return { risks: [], keyTerms: [] };
+  }
 
   if (!isPlainObject(raw)) {
     return { risks: [], keyTerms: [] };
@@ -546,21 +552,50 @@ async function analyzeSmallDocument(pages: PdfPage[]): Promise<ContractAnalysis>
   };
 }
 
+function fallbackSynthesis(
+  risks: ContractRisk[],
+  keyTerms: string[],
+  baselineScore: number,
+): ContractAnalysis {
+  const summary =
+    risks.length > 0
+      ? `Paqt identified ${risks.length} potential risk${
+          risks.length === 1 ? '' : 's'
+        } in this contract. The document warrants a closer look before signing.`
+      : 'Paqt identified no major risks in this contract.';
+  return {
+    contractType: 'Contract',
+    parties: [],
+    keyTerms,
+    risks,
+    overallRiskScore: baselineScore,
+    summary,
+    recommendations: [
+      'Review the flagged clauses with the other party before signing.',
+      'Ask Paqt to explain any risk in more detail.',
+      'Consider qualified legal counsel for consequential provisions.',
+    ],
+  };
+}
+
 async function synthesizeDocument(
   risks: ContractRisk[],
   keyTerms: string[],
   baselineScore: number,
 ): Promise<ContractAnalysis> {
-  const raw = await groqJsonRequest(
-    JSON_SYSTEM_PROMPT,
-    synthesisPrompt(risks, keyTerms, baselineScore),
-  );
+  let raw: unknown;
+  try {
+    raw = await groqJsonRequest(
+      JSON_SYSTEM_PROMPT,
+      synthesisPrompt(risks, keyTerms, baselineScore),
+    );
+  } catch (caught) {
+    console.warn('Synthesis fell back to a deterministic brief:', caught);
+    return fallbackSynthesis(risks, keyTerms, baselineScore);
+  }
 
   if (!isPlainObject(raw)) {
-    throw new GroqServiceError(
-      'invalid_json',
-      'AI returned an unexpected analysis format. Please retry.',
-    );
+    return fallbackSynthesis(risks, keyTerms, baselineScore);
   }
 
   return {

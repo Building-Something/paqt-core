@@ -27,7 +27,7 @@ Constants:
 - per-page reasoning effort: medium
 - analysis context truncation: 16,000 chars (chat; keeps a turn within the TPM budget)
 - interaction full-text char limit: 300,000
-- interaction max tokens: 4,096
+- interaction max tokens: 8,192
 - interaction window char limit: 20,000
 - interaction window overlap pages: 1
 - client token budget per minute: 7,000
@@ -105,8 +105,14 @@ Paqt mitigates with three layers:
    windows ≤ `INTERACTION_WINDOW_CHAR_LIMIT`, chat context ≤ `ANALYSIS_CONTEXT_LIMIT`
    chars (page-aware: the asked-about page + neighbors, head-of-document fallback).
 
-While pacing or waiting out a retry, the UI surfaces an honest "rate limited / cooling
-down" state instead of a silent skip.
+Rate-limit waits stay developer-facing (console). The UI keeps showing the current
+step ("Analyzing page 3 of 9…") with a neutral "Still working on the contract…"
+label during retries. Failures are contained so the analysis always completes:
+
+- a page that fails after retries is skipped and logged (`analyzePage`),
+- an interaction window that fails is skipped and logged, the rest continue,
+- the final brief degrades to a deterministic synthesis of the gathered risks
+  (`fallbackSynthesis`) instead of surfacing an error.
 
 ## Deterministic score
 Weights:

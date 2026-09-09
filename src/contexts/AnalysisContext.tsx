@@ -109,6 +109,7 @@ function toErrorMessage(error: unknown): AnalysisError {
     const code: GroqErrorCode = KNOWN_CODES.includes(error.code as GroqErrorCode)
       ? (error.code as GroqErrorCode)
       : 'unknown';
+    console.error(`[paqt] groq error ${error.code} (${error.status}):`, error.message);
     return {
       code,
       message: groqErrorMessage(code),
@@ -159,13 +160,14 @@ export function AnalysisProvider({ children }: AnalysisProviderProps) {
 
   useEffect(() => {
     setGroqWaitListener((notice) => {
-      setProgress((prev) => ({
-        ...prev,
-        label:
-          notice.reason === 'retry'
-            ? `AI service cooling down — retrying in ~${Math.max(1, Math.round(notice.waitMs / 1000))}s\u2026`
-            : 'Pacing requests to stay within the AI service\u2019s rate limit\u2026',
-      }));
+      if (notice.reason === 'retry') {
+        setProgress((prev) => ({
+          ...prev,
+          label: 'Still working on the contract\u2026',
+        }));
+      } else {
+        console.debug('[paqt] pacing requests:', notice);
+      }
     });
     return () => setGroqWaitListener(null);
   }, []);

@@ -296,6 +296,11 @@ export async function groqProxyHandler(req, res) {
     } catch {
       parsed = null;
     }
+    const detail =
+      parsed && parsed.error && parsed.error.message
+        ? parsed.error.message
+        : (upstreamText || '').slice(0, 300);
+    console.error(`[groq] upstream ${upstream.status}: ${detail}`);
     const error = mapUpstreamError(upstream.status, parsed);
     if (upstream.status === 429) {
       const afterMs = retryAfterMs(upstream);
