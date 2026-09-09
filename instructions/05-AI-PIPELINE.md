@@ -97,9 +97,11 @@ Paqt mitigates with three layers:
    headers (including `x-ratelimit-reset-tokens`, which Groq formats as durations like
    `2m59.56s`) and includes `retryAfterMs` in the JSON body of every 429. The client
    retries after the reported reset window (capped at `MAX_RATE_LIMIT_WAIT_MS`) instead
-   of a fixed guess. A 429 whose daily request allowance is exhausted
-   (`x-ratelimit-remaining-requests ≤ 0`) is classified as `rate_limited_daily` and
-   surfaces "daily allowance used up" instead of retrying into a wall.
+   of a fixed guess. A 429 caused by a long-horizon cap — daily request allowance
+   (`x-ratelimit-remaining-requests ≤ 0`) or daily token allowance (Groq reports
+   "tokens per day (TPD)" in its message) — is classified as `rate_limited_daily`,
+   carries Groq's real reset ETA, and surfaces "daily allowance used up, resumes at
+   …" instead of retrying into a wall.
 2. **Client-side token pacing.** Every request reserves an estimated budget
    (chars/4 + output + overhead) from a sliding per-minute bucket
    (`TokenPacer`, `CLIENT_TOKEN_BUDGET_PER_MINUTE`). Requests that would exceed the

@@ -328,14 +328,24 @@ export async function groqProxyHandler(req, res) {
       const remainingRequests = Number(
         upstream.headers.get('x-ratelimit-remaining-requests'),
       );
+      const upstreamMessage =
+        parsed && parsed.error && typeof parsed.error.message === 'string'
+          ? parsed.error.message
+          : '';
+      const tpdExhausted =
+        upstreamMessage.toLowerCase().includes('tokens per day') ||
+        upstreamMessage.toLowerCase().includes('tpd');
       const dailyCap =
-        Number.isFinite(remainingRequests) && remainingRequests <= 0;
+        (Number.isFinite(remainingRequests) && remainingRequests <= 0) ||
+        tpdExhausted;
       const afterMs = retryAfterMs(upstream);
       if (dailyCap) {
         error.code = 'rate_limited_daily';
-        error.message = 'Daily AI request allowance reached.';
+        error.message = tpdExhausted
+          ? `The plan's daily AI token allowance is used up. ${upstreamMessage}`
+          : 'Daily AI request allowance reached.';
       }
-      console.error(`[groq] upstream 429 (${dailyCap ? 'daily requests' : 'per-minute tokens'}): ${detail}`);
+      console.error(`[groq] upstream 429 (${tpdExhausted ? 'daily tokens' : dailyCap ? 'daily requests' : 'per-minute tokens'}): ${detail}`);
       if (afterMs !== undefined) {
         res.setHeader('Connection', 'close');
         res.status(error.status).json({

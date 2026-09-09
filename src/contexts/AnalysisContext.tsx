@@ -113,7 +113,10 @@ function toErrorMessage(error: unknown): AnalysisError {
     console.error(`[paqt] groq error ${error.code} (${error.status}):`, error.message);
     return {
       code,
-      message: groqErrorMessage(code),
+      message:
+        code === 'rate_limited_daily' && error.message
+          ? error.message
+          : groqErrorMessage(code),
       retriable: RETRIABLE_CODES.includes(code),
     };
   }
