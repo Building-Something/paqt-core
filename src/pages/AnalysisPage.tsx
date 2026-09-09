@@ -69,7 +69,7 @@ export function AnalysisPage() {
     };
   }, [title, selectedRisk]);
 
-  if (!file && !isDraft && !record) {
+  if (progress.stage === 'idle' && !file && !isDraft && !record) {
     return <Navigate to="/analyze" replace />;
   }
 
@@ -198,11 +198,26 @@ export function AnalysisPage() {
             progress={progress}
             fileName={fileName}
           />
+          {progress.stage === 'analyzing' && progress.risks && progress.risks.length > 0 ? (
+            <div className="card mt-4 p-4">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Findings so far ({progress.risks.length})
+              </h3>
+              <div className="mt-2">
+                <RiskBreakdown risks={progress.risks} />
+              </div>
+              <p className="mt-3 text-xs text-muted-foreground">
+                Updated page by page as the review progresses.
+              </p>
+            </div>
+          ) : null}
           <div className="mt-4 flex items-start gap-2 rounded-lg border border-border bg-card px-4 py-3 text-sm text-muted-foreground">
             <GitCompareArrows className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" />
             <span>
-              The document is processed in chunks so large contracts stay
-              accurate without losing context.
+              Each page is analyzed one at a time, in order, so every page gets
+              focused attention. Findings accumulate live and a cross-clause pass
+              runs at the end to catch risks that span multiple pages. You can
+              leave and resume from the last analyzed page anytime.
             </span>
           </div>
         </div>

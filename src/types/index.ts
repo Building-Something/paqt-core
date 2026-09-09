@@ -59,6 +59,10 @@ export interface AnalysisProgress {
   stage: ProgressStage;
   label: string;
   pageRange?: string;
+  from?: number;
+  to?: number;
+  total?: number;
+  risks?: ContractRisk[];
 }
 
 export interface BuildAnalysisInput {

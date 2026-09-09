@@ -7,6 +7,7 @@ import { UploadDropzone } from '../components/UploadDropzone';
 import { EmptyState } from '../components/EmptyState';
 import { Disclaimer } from '../components/Disclaimer';
 import { ScoreBadge } from '../components/ScoreBadge';
+import { CheckpointList } from '../components/CheckpointList';
 
 export function AnalyzeHubPage() {
   const navigate = useNavigate();
@@ -23,7 +24,8 @@ export function AnalyzeHubPage() {
     progress.stage !== 'error';
 
   function handleFileSelected(file: File) {
-    void beginAnalysis(file).then(() => navigate('/analysis'));
+    void beginAnalysis(file);
+    navigate('/analysis');
   }
 
   function handleOpen(entry: HistoryEntry) {
@@ -45,6 +47,8 @@ export function AnalyzeHubPage() {
       <div className="mt-8">
         <UploadDropzone onFileSelected={handleFileSelected} busy={busy} />
       </div>
+
+      <CheckpointList />
 
       <section className="mt-12">
         <div className="flex items-center justify-between gap-3">

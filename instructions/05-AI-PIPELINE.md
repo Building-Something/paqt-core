@@ -23,34 +23,50 @@ If a page has no extractable text, treat it as potentially scanned and do not in
 Constants:
 - single-call max pages: 6
 - single-call max chars: 25,000
-- pages per batch: 8
-- batch char limit: 20,000
-- batch max tokens: 4,096
+- per-page max tokens: 6,144
+- per-page reasoning effort: medium
 - analysis context truncation: 80,000 chars
 - interaction full-text char limit: 300,000
 - interaction max tokens: 16,384
 
 ### Small document
-One JSON-mode request.
+One JSON-mode request (≤ 6 pages and 25k chars).
 
-### Large document
-1. Split pages.
-2. Group into batches constrained by both page count and character count.
-3. Analyze sequentially.
-4. Normalize risks.
-5. Deduplicate.
-6. Sort.
+### Large document — per-page streaming
+Documents beyond the single-call budget are analyzed page by page, in order, so
+every page gets focused attention and results accumulate live:
+
+1. For each page (sequentially): one JSON-mode request containing only that page,
+   asking for `risks` and `keyTerms` for that page.
+2. Normalize + deduplicate + sort the accumulated risk set after every page and
+   surface it through progress, so the breakdown grows live during analysis.
+3. After the last page, run the cross-clause interaction pass over the full text.
+
+Never parallelize pages by default because rate limits and ordering matter.
+
+### Checkpoint / resume
+After every analyzed page the client persists a checkpoint (`checkpointService.ts`,
+storage key `paqt.checkpoints.v1`):
+
+- id, fileName, pageCount, processedPages, accumulated risks + key terms,
+- the PDF itself (base64) when it fits the storage limit so a pause can resume
+  without re-upload; otherwise resume requires re-selecting the same file,
+- capped to the most recent 3 checkpoints.
+
+Resuming starts the loop at `processedPages` with the stored findings instead of
+re-analyzing completed pages. On success the checkpoint is cleared and the final
+analysis is written to history under the same id.
 
 ### Cross-clause interaction pass (both paths)
-The per-batch/single-pass extraction is intentionally local: it is told to analyze
-only supplied pages, so risks that live across clauses or in clause interactions are
-structurally invisible to it. A final document-wide pass fixes exactly that:
+The per-page/single-pass extraction is intentionally local: it is told to analyze
+only the supplied page, so risks that live across clauses or in clause interactions
+are structurally invisible to it. A final document-wide pass fixes exactly that:
 
 1. Re-read the FULL extracted text (with page markers) via `extractContractText` —
    only when it fits `INTERACTION_FULL_TEXT_CHAR_LIMIT`; otherwise the pass is skipped
    gracefully.
 2. Request JSON without strict JSON mode, at `reasoning_effort: high` (per-page
-   extraction stays at `low`), budgets `INTERACTION_MAX_TOKENS`.
+   extraction stays at `medium`), budgets `INTERACTION_MAX_TOKENS`.
 3. The prompt feeds the full text + the already-identified risks and returns ONLY
    net-new cross-clause risks: contradictions, undermined protections, compounded
    exposures, broken cross-references, inconsistent definitions, coverage gaps.
@@ -64,8 +80,6 @@ structurally invisible to it. A final document-wide pass fixes exactly that:
 
 The pass is best-effort: any error skips it with a warning rather than failing the
 analysis.
-
-Never parallelize batches by default because rate limits and ordering matter.
 
 ## Retry
 Up to three attempts.

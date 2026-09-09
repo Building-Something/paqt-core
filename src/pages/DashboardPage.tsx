@@ -15,6 +15,7 @@ import { formatRelativeTime, type HistoryEntry } from '../services/historyServic
 import { EmptyState } from '../components/EmptyState';
 import { Disclaimer } from '../components/Disclaimer';
 import { ScoreBadge } from '../components/ScoreBadge';
+import { CheckpointList } from '../components/CheckpointList';
 import { Button } from '../components/ui/button';
 import { Card } from '../components/ui/card';
 
@@ -207,6 +208,8 @@ export function DashboardPage() {
           </Button>
         </div>
       ) : null}
+
+      <CheckpointList />
 
       <section className="mt-8 grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-3 xl:grid-cols-5">
         <StatCard icon={FileText} label="Contracts analyzed" value={analyses.length} hint="Completed reviews" />

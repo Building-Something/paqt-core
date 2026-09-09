@@ -1,7 +1,6 @@
 import type { ContractAnalysis, ContractRisk, PdfPage, ProgressStage } from '../types';
 import {
   ANALYSIS_CONTEXT_LIMIT,
-  BATCH_MAX_TOKENS,
   INTERACTION_FULL_TEXT_CHAR_LIMIT,
   INTERACTION_MAX_TOKENS,
   SINGLE_CALL_MAX_CHARS,
@@ -12,12 +11,12 @@ import { GroqServiceError } from './errors';
 import { computeRiskScore, normalizeRisks } from '../utils/risks';
 import { keepVerifiedRisks, verifyRisksAgainstPages } from '../utils/riskVerify';
 import { parseJsonObject } from '../utils/json';
-import { groupPagesIntoBatches } from '../utils/batching';
 
 const MAX_ATTEMPTS = 3;
 const BACKOFF_BASE_MS = 1000;
 const JSON_MAX_TOKENS = 4096;
 const CHAT_MAX_TOKENS = 2048;
+const PER_PAGE_MAX_TOKENS = 6144;
 
 export type ReasoningEffort = 'low' | 'medium' | 'high';
 
@@ -209,21 +208,58 @@ ${FULL_ANALYSIS_SCHEMA}
 ${SEVERITY_GUIDANCE}`;
 }
 
-function batchAnalysisPrompt(pages: PdfPage[]): string {
-  const text = pages
-    .map((page) => buildPageMarkers(page.pageNumber, page.text))
-    .join('\n\n');
+const PAGE_ANALYSIS_SCHEMA = `
+{
+  "risks": [
+    {
+      "id": "string",
+      "text": "exact 10-30 word clause quote from this page",
+      "riskLevel": "low|medium|high|critical",
+      "category": "string",
+      "description": "string",
+      "recommendation": "string",
+      "pageNumber": 1,
+      "searchText": "string"
+    }
+  ],
+  "keyTerms": ["string"]
+}`;
 
+function pageAnalysisPrompt(page: PdfPage): string {
   return `
-Analyze ONLY the supplied pages and return JSON with exactly this schema:
-${FULL_ANALYSIS_SCHEMA}
+Analyze this single contract page and return JSON with exactly this schema:
+${PAGE_ANALYSIS_SCHEMA}
 
 ${SEVERITY_GUIDANCE}
-Analyze ONLY the supplied pages. Do not reference other pages. Do not infer missing text.
-Return risks and key terms reliably; set contractType, parties, overallRiskScore, summary and recommendations to empty/0 values.
+Analyze ONLY this page. Do not reference other pages. Do not infer missing text.
+Report the page number for every risk as ${page.pageNumber}.
 
-Contract pages:
-${text}`;
+Contract page:
+${buildPageMarkers(page.pageNumber, page.text)}`;
+}
+
+interface PageAnalysisOutcome {
+  risks: ContractRisk[];
+  keyTerms: string[];
+}
+
+async function analyzePage(page: PdfPage): Promise<PageAnalysisOutcome> {
+  const raw = await groqJsonRequest(
+    JSON_SYSTEM_PROMPT,
+    pageAnalysisPrompt(page),
+    PER_PAGE_MAX_TOKENS,
+    { reasonEffort: 'medium' },
+  );
+
+  if (!isPlainObject(raw)) {
+    return { risks: [], keyTerms: [] };
+  }
+  return {
+    risks: normalizeRisks(
+      Array.isArray(raw.risks) ? (raw.risks as Partial<ContractRisk>[]) : [],
+    ),
+    keyTerms: isStringArray(raw.keyTerms) ? raw.keyTerms : [],
+  };
 }
 
 const INTERACTION_SCHEMA = `
@@ -423,19 +459,6 @@ async function analyzeSmallDocument(pages: PdfPage[]): Promise<ContractAnalysis>
   };
 }
 
-async function analyzePageBatch(pages: PdfPage[]): Promise<ContractRisk[]> {
-  const raw = await groqJsonRequest(
-    JSON_SYSTEM_PROMPT,
-    batchAnalysisPrompt(pages),
-    BATCH_MAX_TOKENS,
-  );
-
-  if (isPlainObject(raw) && Array.isArray(raw.risks)) {
-    return normalizeRisks(raw.risks as Partial<ContractRisk>[]);
-  }
-  return [];
-}
-
 async function synthesizeDocument(
   risks: ContractRisk[],
   keyTerms: string[],
@@ -467,51 +490,100 @@ async function synthesizeDocument(
   };
 }
 
+export interface AnalyzePageProgress {
+  from: number;
+  to: number;
+  total: number;
+  risks: ContractRisk[];
+  keyTerms: string[];
+  done?: boolean;
+}
+
 export type AnalysisProgressCallback = (
   label: string,
   stage: ProgressStage,
-  detail?: { from: number; to: number; total: number },
+  detail?: AnalyzePageProgress,
 ) => void;
+
+export interface AnalyzePagesOptions {
+  /** 0-based index of the first page to analyze; when > 0 the analysis resumes from stored findings. */
+  fromIndex?: number;
+  existingRisks?: ContractRisk[];
+  existingKeyTerms?: string[];
+}
 
 export async function analyzePages(
   pages: PdfPage[],
   onProgress?: AnalysisProgressCallback,
+  options: AnalyzePagesOptions = {},
 ): Promise<ContractAnalysis> {
   const totalChars = pages.reduce((sum, page) => sum + page.text.length, 0);
+  const startIndex = options.fromIndex ?? 0;
+  const resuming = startIndex > 0;
+  const useSingleCall =
+    !resuming &&
+    pages.length <= SINGLE_CALL_MAX_PAGES &&
+    totalChars <= SINGLE_CALL_MAX_CHARS;
 
   let baseRisks: ContractRisk[];
   let allKeyTerms: string[] = [];
   let smallDoc: ContractAnalysis | null = null;
 
-  if (pages.length <= SINGLE_CALL_MAX_PAGES && totalChars <= SINGLE_CALL_MAX_CHARS) {
+  if (useSingleCall) {
     onProgress?.('Analyzing contract…', 'analyzing');
     smallDoc = await analyzeSmallDocument(pages);
     baseRisks = smallDoc.risks;
     allKeyTerms = smallDoc.keyTerms;
   } else {
-    // Large document: batched path.
-    onProgress?.('Preparing pages…', 'preparing');
-    const batches = groupPagesIntoBatches(pages);
-    const allRisks: ContractRisk[] = [];
+    // Per-page streaming: every page is analyzed individually and in order so
+    // larger documents get focused attention, findings accumulate live, and the
+    // analysis can be resumed from a checkpoint instead of restarting.
+    onProgress?.(
+      resuming
+        ? `Resuming from page ${startIndex + 1} of ${pages.length}…`
+        : 'Preparing pages…',
+      'preparing',
+    );
 
-    for (let i = 0; i < batches.length; i += 1) {
-      const batch = batches[i];
-      const firstPage = batch[0]?.pageNumber ?? 1;
-      const lastPage = batch[batch.length - 1]?.pageNumber ?? firstPage;
+    const allRisks: ContractRisk[] = [...(options.existingRisks ?? [])];
+    allKeyTerms = [...(options.existingKeyTerms ?? [])];
+    const total = pages.length;
+
+    for (let i = startIndex; i < total; i += 1) {
+      const page = pages[i];
+      const current = i + 1;
+      onProgress?.(`Analyzing page ${current} of ${total}…`, 'analyzing', {
+        from: current,
+        to: current,
+        total,
+        risks: normalizeRisks(allRisks),
+        keyTerms: allKeyTerms,
+      });
+      const outcome = await analyzePage(page);
+      allRisks.push(...outcome.risks);
+      allKeyTerms.push(...outcome.keyTerms);
+      const accumulated = normalizeRisks(allRisks);
       onProgress?.(
-        `Analyzing pages ${firstPage}–${lastPage} of ${pages.length}`,
+        `Analyzed page ${current} · ${accumulated.length} finding${
+          accumulated.length === 1 ? '' : 's'
+        } so far`,
         'analyzing',
-        { from: firstPage, to: lastPage, total: pages.length },
+        {
+          from: current,
+          to: current,
+          total,
+          risks: accumulated,
+          keyTerms: allKeyTerms,
+          done: true,
+        },
       );
-      const risks = await analyzePageBatch(batch);
-      allRisks.push(...risks);
     }
 
     baseRisks = normalizeRisks(allRisks);
   }
 
   // Document-wide interaction pass: catches risks hidden across clauses or created
-  // by clause interactions, which the per-page/batch passes structurally cannot see.
+  // by clause interactions, which the per-page passes structurally cannot see.
   onProgress?.('Checking how clauses interact…', 'consolidating');
   let interactionRisks: ContractRisk[] = [];
   try {

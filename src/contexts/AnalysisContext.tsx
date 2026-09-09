@@ -15,6 +15,13 @@ import type {
   PdfPage,
   ProgressStage,
 } from '../types';
+import {
+  dataUrlToFile,
+  fileToDataUrl,
+  getCheckpoint,
+  removeCheckpoint,
+  saveCheckpoint,
+} from '../services/checkpointService';
 import { extractContractText, extractPdfText } from '../services/pdfService';
 import { analyzePages, chatWithContract } from '../services/groqService';
 import { GroqServiceError } from '../services/errors';
@@ -52,6 +59,8 @@ interface AnalysisContextValue {
   beginAnalysis: (file: File) => Promise<void>;
   beginWithText: (sessionName: string, markdown: string) => Promise<void>;
   retryAnalysis: () => Promise<void>;
+  resumeAnalysis: (id: string, givenFile?: File) => Promise<void>;
+  discardCheckpoint: (id: string) => void;
   openEntry: (id: string) => Promise<void>;
   selectRisk: (risk: ContractRisk | null) => void;
   setCurrentPage: (page: number) => void;
@@ -145,12 +154,14 @@ export function AnalysisProvider({ children }: AnalysisProviderProps) {
   const sourceNameRef = useRef('');
   const isDraftRef = useRef(false);
   const draftMarkdownRef = useRef('');
+  const lastCheckpointIdRef = useRef<string | null>(null);
 
   const reset = useCallback(() => {
     runningRef.current = false;
     sourceNameRef.current = '';
     isDraftRef.current = false;
     draftMarkdownRef.current = '';
+    lastCheckpointIdRef.current = null;
     setRecord(null);
     setFile(null);
     setDisplayName('');
@@ -171,9 +182,21 @@ export function AnalysisProvider({ children }: AnalysisProviderProps) {
   }, []);
 
   const runAnalysis = useCallback(
-    async (givenFile: File | null, givenPages: PdfPage[] | null) => {
+    async (
+      givenFile: File | null,
+      givenPages: PdfPage[] | null,
+      options: {
+        checkpointId?: string;
+        existingFileB64?: string;
+        fromIndex?: number;
+        existingRisks?: ContractRisk[];
+        existingKeyTerms?: string[];
+      } = {},
+    ) => {
       runningRef.current = true;
       setError(null);
+      const checkpointId = options.checkpointId ?? null;
+      lastCheckpointIdRef.current = checkpointId;
 
       try {
         let workingPages = givenPages;
@@ -195,23 +218,61 @@ export function AnalysisProvider({ children }: AnalysisProviderProps) {
         const text = await extractContractText(workingPages);
         setContractText(text);
 
-        const completedAnalysis = await analyzePages(workingPages, (label, stage, detail) => {
-          setProgress(
-            makeProgress(
+        let fileB64: string | null = null;
+        if (checkpointId && !isDraftRef.current && givenFile) {
+          fileB64 = options.existingFileB64 ?? (await fileToDataUrl(givenFile));
+        }
+
+        const completedAnalysis = await analyzePages(
+          workingPages,
+          (label, stage, detail) => {
+            setProgress({
               stage,
               label,
-              detail ? `${detail.from}-${detail.to}` : undefined,
-            ),
-          );
-        });
+              pageRange: detail ? `${detail.from}-${detail.to}` : undefined,
+              from: detail?.from,
+              to: detail?.to,
+              total: detail?.total,
+              risks: detail?.risks,
+            });
+            if (
+              stage === 'analyzing' &&
+              detail?.done &&
+              checkpointId &&
+              !isDraftRef.current
+            ) {
+              saveCheckpoint({
+                id: checkpointId,
+                fileName: sourceNameRef.current || 'Contract analysis',
+                fileB64: fileB64 ?? undefined,
+                fileType: givenFile?.type,
+                pageCount: workingPages.length,
+                processedPages: detail.to,
+                risks: detail.risks ?? [],
+                keyTerms: detail.keyTerms ?? [],
+                createdAt: Date.now(),
+                updatedAt: Date.now(),
+              });
+            }
+          },
+          {
+            fromIndex: options.fromIndex,
+            existingRisks: options.existingRisks,
+            existingKeyTerms: options.existingKeyTerms,
+          },
+        );
 
         if (!runningRef.current) {
           return;
         }
         setAnalysis(completedAnalysis);
         setProgress(makeProgress('complete', 'Analysis complete'));
+        lastCheckpointIdRef.current = null;
+        if (checkpointId) {
+          removeCheckpoint(checkpointId);
+        }
         const entry: HistoryEntry = {
-          id: createHistoryId('analysis'),
+          id: checkpointId ?? createHistoryId('analysis'),
           kind: 'analysis',
           name: sourceNameRef.current || 'Contract analysis',
           createdAt: Date.now(),
@@ -242,10 +303,56 @@ export function AnalysisProvider({ children }: AnalysisProviderProps) {
       isDraftRef.current = false;
       draftMarkdownRef.current = '';
       setFile(givenFile);
-      await runAnalysis(givenFile, null);
+      setProgress(makeProgress('preparing', 'Preparing pages…'));
+      await runAnalysis(givenFile, null, { checkpointId: createId('analysis') });
     },
     [reset, runAnalysis],
   );
+
+  const resumeAnalysis = useCallback(
+    async (id: string, givenFile?: File) => {
+      const checkpoint = getCheckpoint(id);
+      if (!checkpoint) {
+        return;
+      }
+      reset();
+      setProgress(makeProgress('preparing', 'Restoring saved session…'));
+      let file = givenFile ?? null;
+      if (!file && checkpoint.fileB64) {
+        try {
+          file = await dataUrlToFile(checkpoint.fileB64, checkpoint.fileName);
+        } catch (caught) {
+          console.warn('Could not restore the saved PDF:', caught);
+          file = null;
+        }
+      }
+      if (!file) {
+        setError({
+          code: 'unknown',
+          message: 'The saved review needs its PDF. Re-upload the same file to continue.',
+          retriable: false,
+        });
+        setProgress(makeProgress('error', 'Re-upload the PDF to resume this review.'));
+        return;
+      }
+      sourceNameRef.current = checkpoint.fileName;
+      isDraftRef.current = false;
+      draftMarkdownRef.current = '';
+      setFile(file);
+      await runAnalysis(file, null, {
+        checkpointId: checkpoint.id,
+        existingFileB64: checkpoint.fileB64,
+        fromIndex: checkpoint.processedPages,
+        existingRisks: checkpoint.risks,
+        existingKeyTerms: checkpoint.keyTerms,
+      });
+    },
+    [reset, runAnalysis],
+  );
+
+  const discardCheckpoint = useCallback((id: string) => {
+    removeCheckpoint(id);
+  }, []);
 
   const beginWithText = useCallback(
     async (sessionName: string, markdown: string) => {
@@ -290,7 +397,9 @@ export function AnalysisProvider({ children }: AnalysisProviderProps) {
   );
 
   const retryAnalysis = useCallback(async () => {
-    await runAnalysis(file, pages.length > 0 ? pages : null);
+    await runAnalysis(file, pages.length > 0 ? pages : null, {
+      checkpointId: lastCheckpointIdRef.current ?? undefined,
+    });
   }, [file, pages, runAnalysis]);
 
   const sendMessage = useCallback(
@@ -357,6 +466,8 @@ export function AnalysisProvider({ children }: AnalysisProviderProps) {
       beginAnalysis,
       beginWithText,
       retryAnalysis,
+      resumeAnalysis,
+      discardCheckpoint,
       openEntry,
       selectRisk,
       setCurrentPage,
@@ -381,6 +492,8 @@ export function AnalysisProvider({ children }: AnalysisProviderProps) {
       beginAnalysis,
       beginWithText,
       retryAnalysis,
+      resumeAnalysis,
+      discardCheckpoint,
       openEntry,
       selectRisk,
       setCurrentPage,
