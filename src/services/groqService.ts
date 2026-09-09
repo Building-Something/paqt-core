@@ -43,6 +43,11 @@ interface GroqCompletionRequest {
 
 interface GroqChatResponse {
   choices?: { message?: { content?: string } }[];
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  };
 }
 
 interface GroqErrorBody {
@@ -84,10 +89,13 @@ async function callGroq(
   payload: GroqCompletionRequest,
   attempt = 1,
 ): Promise<string> {
-  const pacedWaitMs = pacer.reserve(estimateRequestTokens(payload));
-  if (pacedWaitMs > 0) {
-    notifyWait({ reason: 'pacing', waitMs: pacedWaitMs });
-    await sleep(pacedWaitMs);
+  const estimated = estimateRequestTokens(payload);
+  if (attempt === 1) {
+    const pacedWaitMs = pacer.reserve(estimated);
+    if (pacedWaitMs > 0) {
+      notifyWait({ reason: 'pacing', waitMs: pacedWaitMs });
+      await sleep(pacedWaitMs);
+    }
   }
 
   let response: Response;
@@ -125,6 +133,10 @@ async function callGroq(
     const message =
       parsed?.error?.message || 'The AI service returned an unexpected response.';
 
+    if (code === 'rate_limited_daily') {
+      throw new GroqServiceError(code, message, response.status);
+    }
+
     if (isRetryableStatus(response.status) && attempt < MAX_ATTEMPTS) {
       const retryAfterMs = extractRetryAfterMs(
         parsed?.error?.retryAfterMs,
@@ -154,6 +166,15 @@ async function callGroq(
       'invalid_json',
       'AI returned an unexpected analysis format. Please retry.',
     );
+  }
+
+  const actual = parsed.usage?.total_tokens;
+  if (typeof actual === 'number' && Number.isFinite(actual) && actual > 0) {
+    if (actual > estimated) {
+      pacer.charge(actual - estimated);
+    } else if (actual < estimated) {
+      pacer.refund(estimated - actual);
+    }
   }
   return content;
 }

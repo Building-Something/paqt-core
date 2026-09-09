@@ -28,13 +28,36 @@ function copyUpstreamRateLimitHeaders(upstream, target) {
   }
 }
 
-function retryAfterMs(upstream) {
-  const value = upstream.headers.get('retry-after');
-  if (!value) {
+function durationToSeconds(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) {
     return undefined;
   }
-  const seconds = Number.parseFloat(value);
-  if (!Number.isFinite(seconds) || seconds < 0) {
+  const numeric = Number(raw);
+  if (Number.isFinite(numeric)) {
+    return numeric;
+  }
+  const match = raw.match(/^(?:(\d+)m)?\s*(\d+(?:\.\d+)?)s$/i);
+  if (!match) {
+    return undefined;
+  }
+  const minutes = Number(match[1] ?? 0);
+  const seconds = Number(match[2] ?? 0);
+  return minutes * 60 + seconds;
+}
+
+function retryAfterMs(upstream) {
+  const fromRetryAfter = durationToSeconds(
+    upstream.headers.get('retry-after'),
+  );
+  const fromResetTokens = durationToSeconds(
+    upstream.headers.get('x-ratelimit-reset-tokens'),
+  );
+  const fromResetRequests = durationToSeconds(
+    upstream.headers.get('x-ratelimit-reset-requests'),
+  );
+  const seconds = fromRetryAfter ?? fromResetTokens ?? fromResetRequests;
+  if (seconds === undefined || seconds < 0) {
     return undefined;
   }
   return Math.max(0, Math.round(seconds * 1000));
@@ -300,10 +323,19 @@ export async function groqProxyHandler(req, res) {
       parsed && parsed.error && parsed.error.message
         ? parsed.error.message
         : (upstreamText || '').slice(0, 300);
-    console.error(`[groq] upstream ${upstream.status}: ${detail}`);
     const error = mapUpstreamError(upstream.status, parsed);
     if (upstream.status === 429) {
+      const remainingRequests = Number(
+        upstream.headers.get('x-ratelimit-remaining-requests'),
+      );
+      const dailyCap =
+        Number.isFinite(remainingRequests) && remainingRequests <= 0;
       const afterMs = retryAfterMs(upstream);
+      if (dailyCap) {
+        error.code = 'rate_limited_daily';
+        error.message = 'Daily AI request allowance reached.';
+      }
+      console.error(`[groq] upstream 429 (${dailyCap ? 'daily requests' : 'per-minute tokens'}): ${detail}`);
       if (afterMs !== undefined) {
         res.setHeader('Connection', 'close');
         res.status(error.status).json({
@@ -311,6 +343,9 @@ export async function groqProxyHandler(req, res) {
         });
         return;
       }
+    }
+    if (upstream.status === 429) {
+      console.error(`[groq] upstream 429 (no reset window reported): ${detail}`);
     }
     sendError(res, error);
     return;

@@ -31,7 +31,7 @@ Constants:
 - interaction window char limit: 20,000
 - interaction window overlap pages: 1
 - client token budget per minute: 7,000
-- max rate-limit wait: 60,000 ms
+- max rate-limit wait: 120,000 ms
 
 ### Single-page document
 One JSON-mode request (single page up to 25k chars).
@@ -94,14 +94,20 @@ Groq's free plan caps `openai/gpt-oss-120b` at 30 RPM / 1K RPD / 8K TPM / 200K T
 Paqt mitigates with three layers:
 
 1. **Reset-aware retries.** The proxy forwards Groq's `retry-after` and `x-ratelimit-*`
-   headers and includes `retryAfterMs` in the JSON body of every 429. The client retries
-   after the reported reset window (capped at `MAX_RATE_LIMIT_WAIT_MS`) instead of a
-   fixed guess.
+   headers (including `x-ratelimit-reset-tokens`, which Groq formats as durations like
+   `2m59.56s`) and includes `retryAfterMs` in the JSON body of every 429. The client
+   retries after the reported reset window (capped at `MAX_RATE_LIMIT_WAIT_MS`) instead
+   of a fixed guess. A 429 whose daily request allowance is exhausted
+   (`x-ratelimit-remaining-requests ≤ 0`) is classified as `rate_limited_daily` and
+   surfaces "daily allowance used up" instead of retrying into a wall.
 2. **Client-side token pacing.** Every request reserves an estimated budget
    (chars/4 + output + overhead) from a sliding per-minute bucket
    (`TokenPacer`, `CLIENT_TOKEN_BUDGET_PER_MINUTE`). Requests that would exceed the
    budget wait until it refills, so per-page streaming naturally spaces out instead of
-   firing doomed calls.
+   firing doomed calls. Over-budget requests carry a **deficit** instead of resetting
+   the bucket, and after each success the bucket is reconciled against Groq's real
+   `usage.total_tokens` (which includes reasoning tokens) — so pacing tracks actual
+   consumption rather than the estimate.
 3. **Budget-sane call sizes.** Per-page output ≤ `PER_PAGE_MAX_TOKENS`, interaction
    windows ≤ `INTERACTION_WINDOW_CHAR_LIMIT`, chat context ≤ `ANALYSIS_CONTEXT_LIMIT`
    chars (page-aware: the asked-about page + neighbors, head-of-document fallback).

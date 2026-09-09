@@ -38,6 +38,30 @@ describe('TokenPacer', () => {
     expect(pacer.reserve(1)).toBeGreaterThan(0);
   });
 
+  it('carries a deficit after an over-budget request', () => {
+    const now = 0;
+    const pacer = new TokenPacer({ tokensPerMinute: 6000, nowMs: () => now });
+    expect(pacer.reserve(10_000)).toBe(40_000);
+    expect(pacer.reserve(1000)).toBe(50_000);
+  });
+
+  it('refunds unused budget', () => {
+    const now = 0;
+    const pacer = new TokenPacer({ tokensPerMinute: 6000, nowMs: () => now });
+    expect(pacer.reserve(6000)).toBe(0);
+    pacer.refund(2000);
+    expect(pacer.reserve(2000)).toBe(0);
+    expect(pacer.reserve(1)).toBeGreaterThan(0);
+  });
+
+  it('charges actual usage against the budget', () => {
+    const now = 0;
+    const pacer = new TokenPacer({ tokensPerMinute: 6000, nowMs: () => now });
+    expect(pacer.reserve(6000)).toBe(0);
+    pacer.charge(1000);
+    expect(pacer.reserve(1000)).toBe(20_000);
+  });
+
   it('handles zero tokens without waiting', () => {
     const now = 0;
     const pacer = new TokenPacer({ tokensPerMinute: 1000, nowMs: () => now });

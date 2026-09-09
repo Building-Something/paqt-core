@@ -95,6 +95,7 @@ const KNOWN_CODES: GroqErrorCode[] = [
   'not_configured',
   'invalid_key',
   'rate_limited',
+  'rate_limited_daily',
   'timeout',
   'upstream',
   'bad_request',
@@ -245,7 +246,10 @@ export function AnalysisProvider({ children }: AnalysisProviderProps) {
             setProgress((prev) => ({
               stage,
               label,
-              pageRange: detail ? `${detail.from}-${detail.to}` : undefined,
+              pageRange:
+                detail && detail.from !== undefined && detail.to !== undefined
+                  ? `${detail.from}-${detail.to}`
+                  : undefined,
               from: detail?.from,
               to: detail?.to,
               total: detail?.total,

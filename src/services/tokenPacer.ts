@@ -31,7 +31,15 @@ export class TokenPacer {
       return 0;
     }
     const waitMs = Math.ceil((tokens - this.available) / refillRate);
-    this.available = 0;
+    this.available -= tokens;
     return Math.max(0, waitMs);
+  }
+
+  charge(tokens: number): void {
+    this.available -= tokens;
+  }
+
+  refund(tokens: number): void {
+    this.available = Math.min(this.tokensPerMinute, this.available + tokens);
   }
 }

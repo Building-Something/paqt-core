@@ -19,13 +19,19 @@ describe('extractRetryAfterMs', () => {
     expect(extractRetryAfterMs(undefined, '15')).toBe(15_000);
   });
 
+  it('parses duration-style reset headers', () => {
+    expect(extractRetryAfterMs(undefined, '2m59.56s')).toBe(120_000);
+    expect(extractRetryAfterMs(undefined, '7.66s')).toBe(7_660);
+    expect(extractRetryAfterMs(undefined, '1m30s')).toBe(90_000);
+  });
+
   it('ignores a non-numeric header', () => {
     expect(extractRetryAfterMs(undefined, 'not-a-date')).toBeUndefined();
   });
 
   it('caps waits at the maximum delay', () => {
-    expect(extractRetryAfterMs(3_600_000, null)).toBe(60_000);
-    expect(extractRetryAfterMs(undefined, '7200')).toBe(60_000);
+    expect(extractRetryAfterMs(3_600_000, null)).toBe(120_000);
+    expect(extractRetryAfterMs(undefined, '7200')).toBe(120_000);
   });
 
   it('prefers the body value over the header', () => {

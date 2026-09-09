@@ -173,6 +173,7 @@ export type GroqErrorCode =
   | 'not_configured'
   | 'invalid_key'
   | 'rate_limited'
+  | 'rate_limited_daily'
   | 'timeout'
   | 'upstream'
   | 'bad_request'
@@ -189,6 +190,8 @@ export function groqErrorMessage(code: GroqErrorCode): string {
       return 'Your Groq API key was rejected. Check the server environment variable.';
     case 'rate_limited':
       return 'The AI service is temporarily rate-limited. Paqt will retry automatically; try again shortly.';
+    case 'rate_limited_daily':
+      return "This plan's daily AI request allowance is used up. It resets once a day (UTC); try again after the reset.";
     case 'timeout':
       return 'The AI analysis took too long. Try a shorter contract or try again.';
     case 'oversized':

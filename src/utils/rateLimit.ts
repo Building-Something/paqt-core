@@ -6,7 +6,7 @@ export interface TokenEstimateInput {
 const DEFAULT_OUTPUT_TOKENS = 4096;
 const MIN_OUTPUT_TOKENS = 256;
 const OVERHEAD_TOKENS = 64;
-const DEFAULT_MAX_WAIT_MS = 60_000;
+const DEFAULT_MAX_WAIT_MS = 120_000;
 
 export function estimateRequestTokens(payload: TokenEstimateInput): number {
   const inputChars = payload.messages.reduce(
@@ -21,6 +21,21 @@ export function estimateRequestTokens(payload: TokenEstimateInput): number {
   return inputTokens + outputTokens + OVERHEAD_TOKENS;
 }
 
+function durationToSeconds(value: string): number | undefined {
+  const trimmed = value.trim();
+  const numeric = Number(trimmed);
+  if (Number.isFinite(numeric)) {
+    return numeric;
+  }
+  const match = trimmed.match(/^(?:(\d+)m)?\s*(\d+(?:\.\d+)?)s$/i);
+  if (!match) {
+    return undefined;
+  }
+  const minutes = Number(match[1] ?? 0);
+  const seconds = Number(match[2] ?? 0);
+  return minutes * 60 + seconds;
+}
+
 export function extractRetryAfterMs(
   bodyRetryAfterMs?: unknown,
   headerRetryAfter?: string | null,
@@ -31,8 +46,8 @@ export function extractRetryAfterMs(
     return Math.min(Math.max(0, fromBody), maxMs);
   }
   if (headerRetryAfter) {
-    const seconds = Number.parseFloat(headerRetryAfter);
-    if (Number.isFinite(seconds) && seconds >= 0) {
+    const seconds = durationToSeconds(headerRetryAfter);
+    if (seconds !== undefined && seconds >= 0) {
       return Math.min(Math.max(0, Math.round(seconds * 1000)), maxMs);
     }
   }

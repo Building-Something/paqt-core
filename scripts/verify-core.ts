@@ -130,7 +130,8 @@ assert('pacer waits once exhausted', pacing.reserve(1) > 0);
 assert('page request estimate fits budget', estimateRequestTokens({ messages: [{ content: 'x'.repeat(12000) }], max_tokens: 2560 }) < 7000);
 assert('single-call estimate exceeds budget', estimateRequestTokens({ messages: [{ content: 'x'.repeat(25000) }], max_tokens: 4096 }) > 7000);
 assert('retry-after body respected', extractRetryAfterMs(20_000, null) === 20_000);
-assert('retry-after capped at 60s', extractRetryAfterMs(3_600_000, null) === 60_000);
+assert('retry-after capped at 120s', extractRetryAfterMs(3_600_000, null) === 120_000);
+assert('duration reset parsed exactly', extractRetryAfterMs(undefined, '1m30s') === 90_000);
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`);
 process.exit(failures === 0 ? 0 : 1);
