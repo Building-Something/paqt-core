@@ -21,7 +21,7 @@ If a page has no extractable text, treat it as potentially scanned and do not in
 
 ## Routing
 Constants:
-- single-call max pages: 6
+- single-call max pages: 1
 - single-call max chars: 25,000
 - per-page max tokens: 2,560
 - per-page reasoning effort: medium
@@ -33,11 +33,11 @@ Constants:
 - client token budget per minute: 7,000
 - max rate-limit wait: 60,000 ms
 
-### Small document
-One JSON-mode request (≤ 6 pages and 25k chars).
+### Single-page document
+One JSON-mode request (single page up to 25k chars).
 
-### Large document — per-page streaming
-Documents beyond the single-call budget are analyzed page by page, in order, so
+### Multi-page document — per-page streaming
+Every document with more than one page is analyzed page by page, in order, so
 every page gets focused attention and results accumulate live:
 
 1. For each page (sequentially): one JSON-mode request containing only that page,
@@ -71,9 +71,10 @@ are structurally invisible to it. A document-wide pass fixes exactly that:
    window re-including the last `INTERACTION_OVERLAP_PAGES` pages so clause pairs that
    straddle a window boundary are still read together. The pass is skipped gracefully
    when the whole document has no text or exceeds `INTERACTION_FULL_TEXT_CHAR_LIMIT`.
-2. Request JSON per window without strict JSON mode, at `reasoning_effort: high`
-   (per-page extraction stays at `medium`), budgets `INTERACTION_MAX_TOKENS`. A window
-   that fails after retries is skipped with a warning and the remaining windows continue.
+2. Request JSON per window in strict JSON mode at `reasoning_effort: high`
+   (per-page extraction stays at `medium`), budgets `INTERACTION_MAX_TOKENS`. If a
+   strict-JSON attempt is rejected, one relaxed retry (no JSON mode) runs before the
+   window is skipped with a warning and the remaining windows continue.
 3. The prompt feeds each window's text + the already-identified risks and returns ONLY
    net-new cross-clause risks: contradictions, undermined protections, compounded
    exposures, broken cross-references, inconsistent definitions, coverage gaps.

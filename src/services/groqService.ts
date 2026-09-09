@@ -375,6 +375,27 @@ Contract text (page markers included):
 ${tail}`;
 }
 
+async function runInteractionWindow(
+  text: string,
+  risks: ContractRisk[],
+): Promise<unknown> {
+  try {
+    return await groqJsonRequest(
+      JSON_SYSTEM_PROMPT,
+      interactionPrompt(text, risks),
+      INTERACTION_MAX_TOKENS,
+      { reasonEffort: 'high' },
+    );
+  } catch {
+    return groqJsonRequest(
+      JSON_SYSTEM_PROMPT,
+      interactionPrompt(text, risks),
+      INTERACTION_MAX_TOKENS,
+      { reasonEffort: 'high', jsonMode: false },
+    );
+  }
+}
+
 async function findInteractionRisks(
   pages: PdfPage[],
   risks: ContractRisk[],
@@ -388,12 +409,7 @@ async function findInteractionRisks(
   for (const window of windows) {
     let raw: unknown;
     try {
-      raw = await groqJsonRequest(
-        JSON_SYSTEM_PROMPT,
-        interactionPrompt(window.text, risks),
-        INTERACTION_MAX_TOKENS,
-        { reasonEffort: 'high', jsonMode: false },
-      );
+      raw = await runInteractionWindow(window.text, risks);
     } catch (caught) {
       console.warn('Interaction window skipped:', caught);
       continue;
@@ -613,11 +629,11 @@ async function synthesizeDocument(
 }
 
 export interface AnalyzePageProgress {
-  from: number;
-  to: number;
-  total: number;
+  from?: number;
+  to?: number;
+  total?: number;
   risks: ContractRisk[];
-  keyTerms: string[];
+  keyTerms?: string[];
   done?: boolean;
 }
 
@@ -706,7 +722,7 @@ export async function analyzePages(
 
   // Document-wide interaction pass: catches risks hidden across clauses or created
   // by clause interactions, which the per-page passes structurally cannot see.
-  onProgress?.('Checking how clauses interact…', 'consolidating');
+  onProgress?.('Checking how clauses interact…', 'consolidating', { risks: baseRisks });
   let interactionRisks: ContractRisk[] = [];
   try {
     const found = await findInteractionRisks(pages, baseRisks);
@@ -729,7 +745,7 @@ export async function analyzePages(
     };
   }
 
-  onProgress?.('Preparing decision brief…', 'synthesizing');
+  onProgress?.('Preparing decision brief…', 'synthesizing', { risks: merged });
   const baselineScore = computeRiskScore(merged);
   return synthesizeDocument(merged, allKeyTerms, baselineScore);
 }

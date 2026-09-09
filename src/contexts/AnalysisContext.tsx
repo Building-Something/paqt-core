@@ -242,15 +242,15 @@ export function AnalysisProvider({ children }: AnalysisProviderProps) {
         const completedAnalysis = await analyzePages(
           workingPages,
           (label, stage, detail) => {
-            setProgress({
+            setProgress((prev) => ({
               stage,
               label,
               pageRange: detail ? `${detail.from}-${detail.to}` : undefined,
               from: detail?.from,
               to: detail?.to,
               total: detail?.total,
-              risks: detail?.risks,
-            });
+              risks: detail?.risks ?? prev.risks,
+            }));
             if (
               stage === 'analyzing' &&
               detail?.done &&
@@ -263,7 +263,7 @@ export function AnalysisProvider({ children }: AnalysisProviderProps) {
                 fileB64: fileB64 ?? undefined,
                 fileType: givenFile?.type,
                 pageCount: workingPages.length,
-                processedPages: detail.to,
+                processedPages: detail.to ?? 0,
                 risks: detail.risks ?? [],
                 keyTerms: detail.keyTerms ?? [],
                 createdAt: Date.now(),

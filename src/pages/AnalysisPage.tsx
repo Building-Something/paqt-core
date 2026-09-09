@@ -198,7 +198,7 @@ export function AnalysisPage() {
             progress={progress}
             fileName={fileName}
           />
-          {progress.stage === 'analyzing' && progress.risks && progress.risks.length > 0 ? (
+          {progress.risks && progress.risks.length > 0 ? (
             <div className="card mt-4 p-4">
               <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                 Findings so far ({progress.risks.length})
@@ -207,7 +207,7 @@ export function AnalysisPage() {
                 <RiskBreakdown risks={progress.risks} />
               </div>
               <p className="mt-3 text-xs text-muted-foreground">
-                Updated page by page as the review progresses.
+                Updated as the review progresses.
               </p>
             </div>
           ) : null}
