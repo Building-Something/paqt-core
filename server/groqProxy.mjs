@@ -9,6 +9,37 @@ const REASONING_EFFORT = 'low';
 const INCLUDE_REASONING = false;
 const REASONING_LEVELS = ['low', 'medium', 'high'];
 
+const RATE_LIMIT_HEADERS = [
+  'retry-after',
+  'x-ratelimit-limit-requests',
+  'x-ratelimit-remaining-requests',
+  'x-ratelimit-limit-tokens',
+  'x-ratelimit-remaining-tokens',
+  'x-ratelimit-reset-requests',
+  'x-ratelimit-reset-tokens',
+];
+
+function copyUpstreamRateLimitHeaders(upstream, target) {
+  for (const name of RATE_LIMIT_HEADERS) {
+    const value = upstream.headers.get(name);
+    if (value) {
+      target.setHeader(name, value);
+    }
+  }
+}
+
+function retryAfterMs(upstream) {
+  const value = upstream.headers.get('retry-after');
+  if (!value) {
+    return undefined;
+  }
+  const seconds = Number.parseFloat(value);
+  if (!Number.isFinite(seconds) || seconds < 0) {
+    return undefined;
+  }
+  return Math.max(0, Math.round(seconds * 1000));
+}
+
 let apiKey = '';
 
 function loadEnvFile(filePath) {
@@ -256,6 +287,8 @@ export async function groqProxyHandler(req, res) {
     return;
   }
 
+  copyUpstreamRateLimitHeaders(upstream, res);
+
   if (!upstream.ok) {
     let parsed = null;
     try {
@@ -263,7 +296,18 @@ export async function groqProxyHandler(req, res) {
     } catch {
       parsed = null;
     }
-    sendError(res, mapUpstreamError(upstream.status, parsed));
+    const error = mapUpstreamError(upstream.status, parsed);
+    if (upstream.status === 429) {
+      const afterMs = retryAfterMs(upstream);
+      if (afterMs !== undefined) {
+        res.setHeader('Connection', 'close');
+        res.status(error.status).json({
+          error: { code: error.code, message: error.message, retryAfterMs: afterMs },
+        });
+        return;
+      }
+    }
+    sendError(res, error);
     return;
   }
 

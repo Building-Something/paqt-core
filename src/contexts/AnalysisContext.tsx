@@ -2,6 +2,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -23,7 +24,7 @@ import {
   saveCheckpoint,
 } from '../services/checkpointService';
 import { extractContractText, extractPdfText } from '../services/pdfService';
-import { analyzePages, chatWithContract } from '../services/groqService';
+import { analyzePages, chatWithContract, setGroqWaitListener } from '../services/groqService';
 import { GroqServiceError } from '../services/errors';
 import { groqErrorMessage, type GroqErrorCode } from '../utils/risks';
 import { buildDraftPages, splitDraftIntoSections } from '../utils/draft';
@@ -155,6 +156,19 @@ export function AnalysisProvider({ children }: AnalysisProviderProps) {
   const isDraftRef = useRef(false);
   const draftMarkdownRef = useRef('');
   const lastCheckpointIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    setGroqWaitListener((notice) => {
+      setProgress((prev) => ({
+        ...prev,
+        label:
+          notice.reason === 'retry'
+            ? `AI service cooling down — retrying in ~${Math.max(1, Math.round(notice.waitMs / 1000))}s\u2026`
+            : 'Pacing requests to stay within the AI service\u2019s rate limit\u2026',
+      }));
+    });
+    return () => setGroqWaitListener(null);
+  }, []);
 
   const reset = useCallback(() => {
     runningRef.current = false;
@@ -418,7 +432,7 @@ export function AnalysisProvider({ children }: AnalysisProviderProps) {
       setIsChatBusy(true);
 
       try {
-        const reply = await chatWithContract(trimmed, contractText, analysis);
+        const reply = await chatWithContract(trimmed, contractText, analysis, { pages });
         const aiMessage: ChatMessage = {
           id: createId('msg'),
           text: reply,
@@ -439,7 +453,7 @@ export function AnalysisProvider({ children }: AnalysisProviderProps) {
         setIsChatBusy(false);
       }
     },
-    [analysis, contractText, isChatBusy],
+    [analysis, contractText, isChatBusy, pages],
   );
 
   const setCurrentPage = useCallback((page: number) => {

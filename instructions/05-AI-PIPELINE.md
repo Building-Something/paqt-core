@@ -23,11 +23,15 @@ If a page has no extractable text, treat it as potentially scanned and do not in
 Constants:
 - single-call max pages: 6
 - single-call max chars: 25,000
-- per-page max tokens: 6,144
+- per-page max tokens: 2,560
 - per-page reasoning effort: medium
-- analysis context truncation: 80,000 chars
+- analysis context truncation: 16,000 chars (chat; keeps a turn within the TPM budget)
 - interaction full-text char limit: 300,000
-- interaction max tokens: 16,384
+- interaction max tokens: 4,096
+- interaction window char limit: 20,000
+- interaction window overlap pages: 1
+- client token budget per minute: 7,000
+- max rate-limit wait: 60,000 ms
 
 ### Small document
 One JSON-mode request (≤ 6 pages and 25k chars).
@@ -40,7 +44,7 @@ every page gets focused attention and results accumulate live:
    asking for `risks` and `keyTerms` for that page.
 2. Normalize + deduplicate + sort the accumulated risk set after every page and
    surface it through progress, so the breakdown grows live during analysis.
-3. After the last page, run the cross-clause interaction pass over the full text.
+3. After the last page, run the cross-clause interaction pass.
 
 Never parallelize pages by default because rate limits and ordering matter.
 
@@ -60,14 +64,17 @@ analysis is written to history under the same id.
 ### Cross-clause interaction pass (both paths)
 The per-page/single-pass extraction is intentionally local: it is told to analyze
 only the supplied page, so risks that live across clauses or in clause interactions
-are structurally invisible to it. A final document-wide pass fixes exactly that:
+are structurally invisible to it. A document-wide pass fixes exactly that:
 
-1. Re-read the FULL extracted text (with page markers) via `extractContractText` —
-   only when it fits `INTERACTION_FULL_TEXT_CHAR_LIMIT`; otherwise the pass is skipped
-   gracefully.
-2. Request JSON without strict JSON mode, at `reasoning_effort: high` (per-page
-   extraction stays at `medium`), budgets `INTERACTION_MAX_TOKENS`.
-3. The prompt feeds the full text + the already-identified risks and returns ONLY
+1. Build overlapping windows over the pages (`buildInteractionWindows`): pages are
+   packed into consecutive groups of ≤ `INTERACTION_WINDOW_CHAR_LIMIT` chars, each new
+   window re-including the last `INTERACTION_OVERLAP_PAGES` pages so clause pairs that
+   straddle a window boundary are still read together. The pass is skipped gracefully
+   when the whole document has no text or exceeds `INTERACTION_FULL_TEXT_CHAR_LIMIT`.
+2. Request JSON per window without strict JSON mode, at `reasoning_effort: high`
+   (per-page extraction stays at `medium`), budgets `INTERACTION_MAX_TOKENS`. A window
+   that fails after retries is skipped with a warning and the remaining windows continue.
+3. The prompt feeds each window's text + the already-identified risks and returns ONLY
    net-new cross-clause risks: contradictions, undermined protections, compounded
    exposures, broken cross-references, inconsistent definitions, coverage gaps.
    Each carries `pageNumber` plus `relatedPages`.
@@ -78,20 +85,28 @@ are structurally invisible to it. A final document-wide pass fixes exactly that:
 5. Verified interaction risks merge with extraction risks and are normalized as one
    set before scoring and synthesis.
 
-The pass is best-effort: any error skips it with a warning rather than failing the
-analysis.
+The pass is best-effort: any window error skips it with a warning rather than failing
+the analysis.
 
-## Retry
-Up to three attempts.
-Retry:
-- 429,
-- 5xx,
-- network failures.
+## Rate limiting
+Groq's free plan caps `openai/gpt-oss-120b` at 30 RPM / 1K RPD / 8K TPM / 200K TPD.
+Paqt mitigates with three layers:
 
-Backoff:
-`attempt * 1000ms`.
+1. **Reset-aware retries.** The proxy forwards Groq's `retry-after` and `x-ratelimit-*`
+   headers and includes `retryAfterMs` in the JSON body of every 429. The client retries
+   after the reported reset window (capped at `MAX_RATE_LIMIT_WAIT_MS`) instead of a
+   fixed guess.
+2. **Client-side token pacing.** Every request reserves an estimated budget
+   (chars/4 + output + overhead) from a sliding per-minute bucket
+   (`TokenPacer`, `CLIENT_TOKEN_BUDGET_PER_MINUTE`). Requests that would exceed the
+   budget wait until it refills, so per-page streaming naturally spaces out instead of
+   firing doomed calls.
+3. **Budget-sane call sizes.** Per-page output ≤ `PER_PAGE_MAX_TOKENS`, interaction
+   windows ≤ `INTERACTION_WINDOW_CHAR_LIMIT`, chat context ≤ `ANALYSIS_CONTEXT_LIMIT`
+   chars (page-aware: the asked-about page + neighbors, head-of-document fallback).
 
-Do not retry malformed requests.
+While pacing or waiting out a retry, the UI surfaces an honest "rate limited / cooling
+down" state instead of a silent skip.
 
 ## Deterministic score
 Weights:
@@ -118,7 +133,8 @@ Reject non-object output.
 ## Chat
 Use plain text response mode.
 Context:
-- relevant contract text,
+- capped, page-aware contract excerpt (≤ `ANALYSIS_CONTEXT_LIMIT` chars; the
+  asked-about page + neighbors, else the document head),
 - analysis,
 - user question.
 

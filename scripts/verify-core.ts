@@ -14,6 +14,8 @@ import {
   verifyRisksAgainstPages,
   keepVerifiedRisks,
 } from '../src/utils/riskVerify';
+import { estimateRequestTokens, extractRetryAfterMs } from '../src/utils/rateLimit';
+import { TokenPacer } from '../src/services/tokenPacer';
 import type { ContractRisk, PdfPage } from '../src/types';
 
 let failures = 0;
@@ -120,6 +122,15 @@ const fabricated = verifyRisksAgainstPages(verPages, [{ text: 'fabricated invent
 assert('unverifiable quote rejected', keepVerifiedRisks(fabricated).length === 0);
 const crossClause = verifyRisksAgainstPages(verPages, [{ text: 'exclusive remedy shall be a refund', pageNumber: 1, relatedPages: [2] }]);
 assert('cross-clause quote verified and re-pinned', keepVerifiedRisks(crossClause).length === 1 && crossClause[0].pageNumber === 2 && crossClause[0].relatedPages?.join(',') === '2');
+
+// 6. Rate-limit handling
+const pacing = new TokenPacer({ tokensPerMinute: 7000, nowMs: () => 0 });
+assert('pacer starts with full budget', pacing.reserve(7000) === 0);
+assert('pacer waits once exhausted', pacing.reserve(1) > 0);
+assert('page request estimate fits budget', estimateRequestTokens({ messages: [{ content: 'x'.repeat(12000) }], max_tokens: 2560 }) < 7000);
+assert('single-call estimate exceeds budget', estimateRequestTokens({ messages: [{ content: 'x'.repeat(25000) }], max_tokens: 4096 }) > 7000);
+assert('retry-after body respected', extractRetryAfterMs(20_000, null) === 20_000);
+assert('retry-after capped at 60s', extractRetryAfterMs(3_600_000, null) === 60_000);
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`);
 process.exit(failures === 0 ? 0 : 1);

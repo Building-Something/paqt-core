@@ -1,22 +1,30 @@
 import type { ContractAnalysis, ContractRisk, PdfPage, ProgressStage } from '../types';
 import {
   ANALYSIS_CONTEXT_LIMIT,
+  CLIENT_TOKEN_BUDGET_PER_MINUTE,
   INTERACTION_FULL_TEXT_CHAR_LIMIT,
   INTERACTION_MAX_TOKENS,
+  INTERACTION_OVERLAP_PAGES,
+  INTERACTION_WINDOW_CHAR_LIMIT,
+  MAX_RATE_LIMIT_WAIT_MS,
+  PER_PAGE_MAX_TOKENS,
   SINGLE_CALL_MAX_CHARS,
   SINGLE_CALL_MAX_PAGES,
 } from '../constants/pipeline';
-import { buildPageMarkers, extractContractText } from './pdfService';
+import { buildPageMarkers } from './pdfService';
 import { GroqServiceError } from './errors';
+import { TokenPacer } from './tokenPacer';
 import { computeRiskScore, normalizeRisks } from '../utils/risks';
 import { keepVerifiedRisks, verifyRisksAgainstPages } from '../utils/riskVerify';
+import { estimateRequestTokens, extractRetryAfterMs } from '../utils/rateLimit';
 import { parseJsonObject } from '../utils/json';
 
 const MAX_ATTEMPTS = 3;
 const BACKOFF_BASE_MS = 1000;
 const JSON_MAX_TOKENS = 4096;
 const CHAT_MAX_TOKENS = 2048;
-const PER_PAGE_MAX_TOKENS = 6144;
+
+const pacer = new TokenPacer({ tokensPerMinute: CLIENT_TOKEN_BUDGET_PER_MINUTE });
 
 export type ReasoningEffort = 'low' | 'medium' | 'high';
 
@@ -38,83 +46,116 @@ interface GroqChatResponse {
 }
 
 interface GroqErrorBody {
-  error?: { code?: string; message?: string };
+  error?: { code?: string; message?: string; retryAfterMs?: unknown };
 }
 
 function isRetryableStatus(status: number): boolean {
   return status === 429 || status >= 500;
 }
 
+export type GroqWaitReason = 'pacing' | 'retry';
+
+export interface GroqWaitNotice {
+  reason: GroqWaitReason;
+  waitMs: number;
+}
+
+export type GroqWaitListener = (notice: GroqWaitNotice) => void;
+
+let waitListener: GroqWaitListener | null = null;
+
+export function setGroqWaitListener(listener: GroqWaitListener | null): void {
+  waitListener = listener;
+}
+
+function notifyWait(notice: GroqWaitNotice): void {
+  waitListener?.(notice);
+}
+
+function backoffDelay(attempt: number, retryAfterMs?: number): number {
+  const waitMs =
+    retryAfterMs !== undefined && retryAfterMs > 0
+      ? retryAfterMs
+      : attempt * BACKOFF_BASE_MS;
+  return Math.min(waitMs, MAX_RATE_LIMIT_WAIT_MS);
+}
+
 async function callGroq(
   payload: GroqCompletionRequest,
   attempt = 1,
 ): Promise<string> {
+  const pacedWaitMs = pacer.reserve(estimateRequestTokens(payload));
+  if (pacedWaitMs > 0) {
+    notifyWait({ reason: 'pacing', waitMs: pacedWaitMs });
+    await sleep(pacedWaitMs);
+  }
+
+  let response: Response;
   try {
-    const response = await fetch('/api/groq', {
+    response = await fetch('/api/groq', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-
-    let bodyText: string;
-    try {
-      bodyText = await response.text();
-    } catch {
-      bodyText = '';
-    }
-
-    if (!response.ok) {
-      let parsed: GroqErrorBody | null = null;
-      try {
-        parsed = JSON.parse(bodyText) as GroqErrorBody;
-      } catch {
-        parsed = null;
-      }
-      const code = parsed?.error?.code || 'unknown';
-      const message =
-        parsed?.error?.message || 'The AI service returned an unexpected response.';
-
-      if (isRetryableStatus(response.status) && attempt < MAX_ATTEMPTS) {
-        const delay = attempt * BACKOFF_BASE_MS;
-        await sleep(delay);
-        return callGroq(payload, attempt + 1);
-      }
-      throw new GroqServiceError(code, message, response.status);
-    }
-
-    let parsed: GroqChatResponse;
-    try {
-      parsed = JSON.parse(bodyText) as GroqChatResponse;
-    } catch {
-      throw new GroqServiceError(
-        'invalid_json',
-        'AI returned an unexpected analysis format. Please retry.',
-      );
-    }
-
-    const content = parsed.choices?.[0]?.message?.content;
-    if (typeof content !== 'string' || content.length === 0) {
-      throw new GroqServiceError(
-        'invalid_json',
-        'AI returned an unexpected analysis format. Please retry.',
-      );
-    }
-    return content;
   } catch (error) {
-    if (error instanceof GroqServiceError) {
-      throw error;
+    if (error instanceof TypeError && attempt < MAX_ATTEMPTS) {
+      const delay = backoffDelay(attempt);
+      notifyWait({ reason: 'retry', waitMs: delay });
+      await sleep(delay);
+      return callGroq(payload, attempt + 1);
     }
-    if (error instanceof TypeError) {
-      // Network failure or proxy unavailable.
-      if (attempt < MAX_ATTEMPTS) {
-        const delay = attempt * BACKOFF_BASE_MS;
-        await sleep(delay);
-        return callGroq(payload, attempt + 1);
-      }
-      throw new GroqServiceError('network', 'Could not reach Paqt analysis service.');
-    }
-    throw error;
+    throw new GroqServiceError('network', 'Could not reach Paqt analysis service.');
   }
+
+  let bodyText: string;
+  try {
+    bodyText = await response.text();
+  } catch {
+    bodyText = '';
+  }
+
+  if (!response.ok) {
+    let parsed: GroqErrorBody | null = null;
+    try {
+      parsed = JSON.parse(bodyText) as GroqErrorBody;
+    } catch {
+      parsed = null;
+    }
+    const code = parsed?.error?.code || 'unknown';
+    const message =
+      parsed?.error?.message || 'The AI service returned an unexpected response.';
+
+    if (isRetryableStatus(response.status) && attempt < MAX_ATTEMPTS) {
+      const retryAfterMs = extractRetryAfterMs(
+        parsed?.error?.retryAfterMs,
+        response.headers.get('retry-after'),
+      );
+      const delay = backoffDelay(attempt, retryAfterMs);
+      notifyWait({ reason: 'retry', waitMs: delay });
+      await sleep(delay);
+      return callGroq(payload, attempt + 1);
+    }
+    throw new GroqServiceError(code, message, response.status);
+  }
+
+  let parsed: GroqChatResponse;
+  try {
+    parsed = JSON.parse(bodyText) as GroqChatResponse;
+  } catch {
+    throw new GroqServiceError(
+      'invalid_json',
+      'AI returned an unexpected analysis format. Please retry.',
+    );
+  }
+
+  const content = parsed.choices?.[0]?.message?.content;
+  if (typeof content !== 'string' || content.length === 0) {
+    throw new GroqServiceError(
+      'invalid_json',
+      'AI returned an unexpected analysis format. Please retry.',
+    );
+  }
+  return content;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -332,48 +373,94 @@ async function findInteractionRisks(
   pages: PdfPage[],
   risks: ContractRisk[],
 ): Promise<ContractRisk[]> {
-  const text = await extractContractText(pages);
-  if (text.trim().length === 0 || text.length > INTERACTION_FULL_TEXT_CHAR_LIMIT) {
+  const windows = buildInteractionWindows(pages);
+  if (windows.length === 0) {
     return [];
   }
 
-  const raw = await groqJsonRequest(
-    JSON_SYSTEM_PROMPT,
-    interactionPrompt(text, risks),
-    INTERACTION_MAX_TOKENS,
-    { reasonEffort: 'high', jsonMode: false },
-  );
-
-  if (!isPlainObject(raw) || !Array.isArray(raw.risks)) {
-    return [];
+  const candidates: Array<Record<string, unknown>> = [];
+  for (const window of windows) {
+    let raw: unknown;
+    try {
+      raw = await groqJsonRequest(
+        JSON_SYSTEM_PROMPT,
+        interactionPrompt(window.text, risks),
+        INTERACTION_MAX_TOKENS,
+        { reasonEffort: 'high', jsonMode: false },
+      );
+    } catch (caught) {
+      console.warn('Interaction window skipped:', caught);
+      continue;
+    }
+    if (!isPlainObject(raw) || !Array.isArray(raw.risks)) {
+      continue;
+    }
+    candidates.push(
+      ...(raw.risks as Array<Record<string, unknown>>).filter(isPlainObject),
+    );
   }
 
-  const candidates = (raw.risks as Array<Record<string, unknown>>)
-    .filter(isPlainObject)
-    .map((candidate) => ({
-      id: typeof candidate.id === 'string' ? candidate.id : undefined,
-      text:
-        typeof candidate.text === 'string' ? candidate.text : 'Clause text unavailable.',
-      riskLevel: candidate.riskLevel,
-      category: typeof candidate.category === 'string' ? candidate.category : undefined,
-      description:
-        typeof candidate.description === 'string' ? candidate.description : undefined,
-      recommendation:
-        typeof candidate.recommendation === 'string'
-          ? candidate.recommendation
-          : undefined,
-      pageNumber: candidate.pageNumber,
-      relatedPages: Array.isArray(candidate.relatedPages)
-        ? (candidate.relatedPages as unknown[])
+  const mapped = candidates.map((candidate) => ({
+    id: typeof candidate.id === 'string' ? candidate.id : undefined,
+    text:
+      typeof candidate.text === 'string' ? candidate.text : 'Clause text unavailable.',
+    riskLevel: candidate.riskLevel,
+    category: typeof candidate.category === 'string' ? candidate.category : undefined,
+    description:
+      typeof candidate.description === 'string' ? candidate.description : undefined,
+    recommendation:
+      typeof candidate.recommendation === 'string'
+        ? candidate.recommendation
         : undefined,
-      searchText:
-        typeof candidate.searchText === 'string' ? candidate.searchText : undefined,
-    }));
+    pageNumber: candidate.pageNumber,
+    relatedPages: Array.isArray(candidate.relatedPages)
+      ? (candidate.relatedPages as unknown[])
+      : undefined,
+    searchText:
+      typeof candidate.searchText === 'string' ? candidate.searchText : undefined,
+  }));
 
   return verifyRisksAgainstPages(
     pages,
-    candidates as unknown as Partial<ContractRisk>[],
+    mapped as unknown as Partial<ContractRisk>[],
   );
+}
+
+export function buildInteractionWindows(
+  pages: PdfPage[],
+): { pages: PdfPage[]; text: string }[] {
+  const totalChars = pages.reduce((sum, page) => sum + page.text.length, 0);
+  if (totalChars === 0 || totalChars > INTERACTION_FULL_TEXT_CHAR_LIMIT) {
+    return [];
+  }
+
+  const windows: { pages: PdfPage[]; text: string }[] = [];
+  let current: PdfPage[] = [];
+  let currentChars = 0;
+
+  for (const page of pages) {
+    if (
+      current.length > 0 &&
+      currentChars + page.text.length > INTERACTION_WINDOW_CHAR_LIMIT
+    ) {
+      windows.push({ pages: [...current], text: interactionWindowText(current) });
+      const overlap = current.slice(-INTERACTION_OVERLAP_PAGES);
+      current = overlap;
+      currentChars = overlap.reduce((sum, overlapPage) => sum + overlapPage.text.length, 0);
+    }
+    current.push(page);
+    currentChars += page.text.length;
+  }
+
+  if (current.length > 0) {
+    windows.push({ pages: [...current], text: interactionWindowText(current) });
+  }
+
+  return windows;
+}
+
+function interactionWindowText(pages: PdfPage[]): string {
+  return pages.map((page) => buildPageMarkers(page.pageNumber, page.text)).join('\n\n');
 }
 
 function synthesisPrompt(
@@ -616,8 +703,9 @@ export async function chatWithContract(
   question: string,
   contractText: string,
   analysis: ContractAnalysis,
+  options: { pages?: PdfPage[] } = {},
 ): Promise<string> {
-  const contextText = (contractText || '').slice(0, ANALYSIS_CONTEXT_LIMIT);
+  const contextText = buildChatContext(question, contractText, options.pages);
 
   const systemPrompt = [
     'You are Paqt\u2019s contract analysis assistant.',
@@ -644,4 +732,34 @@ export async function chatWithContract(
   const userPrompt = `Contract text (extracted from PDF, page markers included):\n${contextText}\n${analysisSummary}\n\nQuestion:\n${question}`;
 
   return groqTextRequest(systemPrompt, userPrompt);
+}
+
+function buildChatContext(
+  question: string,
+  contractText: string,
+  pages?: PdfPage[],
+): string {
+  if (!contractText) {
+    return '';
+  }
+  const pageMatch = question.match(/\b(?:page|section)\s+(\d+)\b/i);
+  if (pageMatch && pages) {
+    const target = Number(pageMatch[1]);
+    const hit = pages.find((page) => page.pageNumber === target);
+    if (hit && hit.text.trim().length > 0) {
+      const index = pages.indexOf(hit);
+      const parts = [hit];
+      if (index > 0) {
+        parts.unshift(pages[index - 1]);
+      }
+      if (index < pages.length - 1) {
+        parts.push(pages[index + 1]);
+      }
+      return parts
+        .map((page) => buildPageMarkers(page.pageNumber, page.text))
+        .join('\n\n')
+        .slice(0, ANALYSIS_CONTEXT_LIMIT);
+    }
+  }
+  return (contractText || '').slice(0, ANALYSIS_CONTEXT_LIMIT);
 }
