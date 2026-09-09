@@ -2,12 +2,15 @@ import type { ContractAnalysis, ContractRisk, PdfPage, ProgressStage } from '../
 import {
   ANALYSIS_CONTEXT_LIMIT,
   BATCH_MAX_TOKENS,
+  INTERACTION_FULL_TEXT_CHAR_LIMIT,
+  INTERACTION_MAX_TOKENS,
   SINGLE_CALL_MAX_CHARS,
   SINGLE_CALL_MAX_PAGES,
 } from '../constants/pipeline';
-import { buildPageMarkers } from './pdfService';
+import { buildPageMarkers, extractContractText } from './pdfService';
 import { GroqServiceError } from './errors';
 import { computeRiskScore, normalizeRisks } from '../utils/risks';
+import { keepVerifiedRisks, verifyRisksAgainstPages } from '../utils/riskVerify';
 import { parseJsonObject } from '../utils/json';
 import { groupPagesIntoBatches } from '../utils/batching';
 
@@ -15,6 +18,8 @@ const MAX_ATTEMPTS = 3;
 const BACKOFF_BASE_MS = 1000;
 const JSON_MAX_TOKENS = 4096;
 const CHAT_MAX_TOKENS = 2048;
+
+export type ReasoningEffort = 'low' | 'medium' | 'high';
 
 interface GroqCompletionMessage {
   role: 'user' | 'assistant' | 'system';
@@ -25,6 +30,7 @@ interface GroqCompletionRequest {
   messages: GroqCompletionMessage[];
   temperature?: number;
   max_tokens?: number;
+  reasoning_effort?: ReasoningEffort;
   response_format?: { type: 'json_object' };
 }
 
@@ -120,6 +126,7 @@ export async function groqJsonRequest(
   systemPrompt: string,
   userPrompt: string,
   maxTokens = JSON_MAX_TOKENS,
+  options: { reasonEffort?: ReasoningEffort; jsonMode?: boolean } = {},
 ): Promise<unknown> {
   const content = await callGroq({
     messages: [
@@ -128,7 +135,11 @@ export async function groqJsonRequest(
     ],
     temperature: 0.2,
     max_tokens: maxTokens,
-    response_format: { type: 'json_object' },
+    reasoning_effort: options.reasonEffort,
+    response_format:
+      options.jsonMode === false
+        ? undefined
+        : { type: 'json_object' },
   });
   return parseJsonObject(content);
 }
@@ -213,6 +224,120 @@ Return risks and key terms reliably; set contractType, parties, overallRiskScore
 
 Contract pages:
 ${text}`;
+}
+
+const INTERACTION_SCHEMA = `
+{
+  "risks": [
+    {
+      "id": "string",
+      "text": "verbatim 15-45 word quote drawn from the supplied contract text, including every clause involved",
+      "riskLevel": "low|medium|high|critical",
+      "category": "string",
+      "description": "string explaining the cross-clause conflict, contradiction, or compounding effect",
+      "recommendation": "string",
+      "pageNumber": 1,
+      "relatedPages": [1, 2],
+      "searchText": "string of 5-10 searchable words"
+    }
+  ]
+}`;
+
+function interactionPrompt(tail: string, risks: ContractRisk[]): string {
+  const existing = risks
+    .map(
+      (risk) =>
+        `- ["${risk.text}", level ${risk.riskLevel}, page ${risk.pageNumber}]`,
+    )
+    .join('\n');
+
+  return `
+You are a senior contract reviewer performing a document-wide cross-clause audit.
+Your job is to find risks that are HIDDEN ACROSS MULTIPLE CLAUSES or that arise from the
+INTERACTION between separate provisions. These are exactly the risks a page-by-page
+review misses.
+
+Return JSON with exactly this schema:
+${INTERACTION_SCHEMA}
+
+Types of cross-clause risks to hunt for:
+- Contradictions and conflicts between two or more provisions.
+- One clause quietly undermining a protection granted elsewhere (e.g. a warranty or
+  indemnity that a later exception swallows).
+- Provisions that compound: individually benign terms that together create an
+  off-market or harmful outcome.
+- Broken or misleading cross-references (e.g. "defined in Section 12.3" where the
+  section actually says something different, or numbered sections the parties rely on
+  but that do not say what they appear to).
+- Inconsistent definitions across the document.
+- Coverage gaps: protections or rights that break because related clauses are missing
+  or conditional.
+Do NOT report single-clause issues that appear on one page in isolation; those are
+already captured by the extraction pass. Report ONLY risks that require reading two or
+more clauses together. Do not re-report a risk already in the list below unless the
+interaction produces a materially NEW risk.
+
+Evidence rules:
+- Quote VERBATIM from the supplied contract text. Do not paraphrase or combine quotes
+  into prose.
+- Every risk must give exact page numbers: pageNumber for the primary clause and
+  relatedPages for EVERY other page involved.
+- If you cannot tie the risk to exact quoted language on real pages, omit it.
+- Do not claim to provide legal advice.
+
+Existing risks already identified (do not duplicate unless materially new):
+${existing || 'none'}
+
+Contract text (page markers included):
+${tail}`;
+}
+
+async function findInteractionRisks(
+  pages: PdfPage[],
+  risks: ContractRisk[],
+): Promise<ContractRisk[]> {
+  const text = await extractContractText(pages);
+  if (text.trim().length === 0 || text.length > INTERACTION_FULL_TEXT_CHAR_LIMIT) {
+    return [];
+  }
+
+  const raw = await groqJsonRequest(
+    JSON_SYSTEM_PROMPT,
+    interactionPrompt(text, risks),
+    INTERACTION_MAX_TOKENS,
+    { reasonEffort: 'high', jsonMode: false },
+  );
+
+  if (!isPlainObject(raw) || !Array.isArray(raw.risks)) {
+    return [];
+  }
+
+  const candidates = (raw.risks as Array<Record<string, unknown>>)
+    .filter(isPlainObject)
+    .map((candidate) => ({
+      id: typeof candidate.id === 'string' ? candidate.id : undefined,
+      text:
+        typeof candidate.text === 'string' ? candidate.text : 'Clause text unavailable.',
+      riskLevel: candidate.riskLevel,
+      category: typeof candidate.category === 'string' ? candidate.category : undefined,
+      description:
+        typeof candidate.description === 'string' ? candidate.description : undefined,
+      recommendation:
+        typeof candidate.recommendation === 'string'
+          ? candidate.recommendation
+          : undefined,
+      pageNumber: candidate.pageNumber,
+      relatedPages: Array.isArray(candidate.relatedPages)
+        ? (candidate.relatedPages as unknown[])
+        : undefined,
+      searchText:
+        typeof candidate.searchText === 'string' ? candidate.searchText : undefined,
+    }));
+
+  return verifyRisksAgainstPages(
+    pages,
+    candidates as unknown as Partial<ContractRisk>[],
+  );
 }
 
 function synthesisPrompt(
@@ -354,36 +479,65 @@ export async function analyzePages(
 ): Promise<ContractAnalysis> {
   const totalChars = pages.reduce((sum, page) => sum + page.text.length, 0);
 
+  let baseRisks: ContractRisk[];
+  let allKeyTerms: string[] = [];
+  let smallDoc: ContractAnalysis | null = null;
+
   if (pages.length <= SINGLE_CALL_MAX_PAGES && totalChars <= SINGLE_CALL_MAX_CHARS) {
     onProgress?.('Analyzing contract…', 'analyzing');
-    return analyzeSmallDocument(pages);
+    smallDoc = await analyzeSmallDocument(pages);
+    baseRisks = smallDoc.risks;
+    allKeyTerms = smallDoc.keyTerms;
+  } else {
+    // Large document: batched path.
+    onProgress?.('Preparing pages…', 'preparing');
+    const batches = groupPagesIntoBatches(pages);
+    const allRisks: ContractRisk[] = [];
+
+    for (let i = 0; i < batches.length; i += 1) {
+      const batch = batches[i];
+      const firstPage = batch[0]?.pageNumber ?? 1;
+      const lastPage = batch[batch.length - 1]?.pageNumber ?? firstPage;
+      onProgress?.(
+        `Analyzing pages ${firstPage}–${lastPage} of ${pages.length}`,
+        'analyzing',
+        { from: firstPage, to: lastPage, total: pages.length },
+      );
+      const risks = await analyzePageBatch(batch);
+      allRisks.push(...risks);
+    }
+
+    baseRisks = normalizeRisks(allRisks);
   }
 
-  // Large document: batched path.
-  onProgress?.('Preparing pages…', 'preparing');
-  const batches = groupPagesIntoBatches(pages);
-  const allRisks: ContractRisk[] = [];
-  const allKeyTerms: string[] = [];
-
-  for (let i = 0; i < batches.length; i += 1) {
-    const batch = batches[i];
-    const firstPage = batch[0]?.pageNumber ?? 1;
-    const lastPage = batch[batch.length - 1]?.pageNumber ?? firstPage;
-    onProgress?.(
-      `Analyzing pages ${firstPage}–${lastPage} of ${pages.length}`,
-      'analyzing',
-      { from: firstPage, to: lastPage, total: pages.length },
-    );
-    const risks = await analyzePageBatch(batch);
-    allRisks.push(...risks);
+  // Document-wide interaction pass: catches risks hidden across clauses or created
+  // by clause interactions, which the per-page/batch passes structurally cannot see.
+  onProgress?.('Checking how clauses interact…', 'consolidating');
+  let interactionRisks: ContractRisk[] = [];
+  try {
+    const found = await findInteractionRisks(pages, baseRisks);
+    interactionRisks = keepVerifiedRisks(found);
+  } catch (caught) {
+    console.warn('Cross-clause interaction pass skipped:', caught);
   }
 
-  onProgress?.('Consolidating findings…', 'consolidating');
-  const normalized = normalizeRisks(allRisks);
+  const merged = normalizeRisks([...baseRisks, ...interactionRisks]);
+
+  if (smallDoc) {
+    return {
+      contractType: smallDoc.contractType,
+      parties: smallDoc.parties,
+      keyTerms: smallDoc.keyTerms,
+      risks: merged,
+      overallRiskScore: computeRiskScore(merged),
+      summary: smallDoc.summary,
+      recommendations: smallDoc.recommendations,
+    };
+  }
 
   onProgress?.('Preparing decision brief…', 'synthesizing');
-  const baselineScore = computeRiskScore(normalized);
-  return synthesizeDocument(normalized, allKeyTerms, baselineScore);
+  const baselineScore = computeRiskScore(merged);
+  return synthesizeDocument(merged, allKeyTerms, baselineScore);
 }
 
 export async function chatWithContract(

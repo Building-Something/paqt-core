@@ -81,8 +81,9 @@ instructions/         product/architecture specs the implementation was built ag
 1. **Extraction (client).** pdf.js pulls text from the PDF in the browser — the raw file never leaves the client.
 2. **Batching.** Long documents are split into sequential chunks (up to 8 pages / 20k chars per chunk) so large contracts stay accurate (see `src/constants/pipeline.ts`, `src/utils/batching.ts`).
 3. **Analysis (server).** Each batch is sent to Groq through Paqt’s `/api/groq` proxy with strict server-side model, temperature, and reasoning settings. The model returns structured findings (JSON) — parsing is defensive (`src/utils/json.ts`).
-4. **Normalization.** Risks are deduplicated, typed, sorted by page then severity, and scored with a deterministic heuristic (`src/utils/risks.ts`). Scores are 0–100 decision-support signals, defaulting to 10 when no risks are found.
-5. **Chat.** The assistant answers with the extracted text + the full analysis in context, so answers reference real clauses.
+4. **Cross-clause pass (server).** Because single-clause extraction cannot see risks hidden across clauses, a document-wide pass re-reads the full extracted text with the highest supported reasoning effort (`high`) and hunts for conflicts, contradictions, compounded exposures, broken cross-references, and undermined protections. Every new finding is deterministically verified against the real page text — quotes are matched (exact then fuzzy), page numbers re-pinned, and anything unverifiable is dropped (`src/utils/riskVerify.ts`, `groqService.findInteractionRisks`). Interaction risks can carry a `relatedPages` list shown in the UI.
+5. **Normalization.** Risks are deduplicated, typed, sorted by page then severity, and scored with a deterministic heuristic (`src/utils/risks.ts`). Scores are 0–100 decision-support signals, defaulting to 10 when no risks are found.
+6. **Chat.** The assistant answers with the extracted text + the full analysis in context, so answers reference real clauses.
 
 All AI configuration (model, key, timeout, reasoning prompts) lives on the server. The browser bundle never contains `GROQ_API_KEY`.
 

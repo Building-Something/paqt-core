@@ -1,6 +1,12 @@
 import type { ContractRisk } from '../types';
 import { SEVERITY_META, formatPageLabel } from '../utils/risks';
-import { FileText, Quote, Lightbulb, ChevronRight } from 'lucide-react';
+import {
+  FileText,
+  GitCompareArrows,
+  Quote,
+  Lightbulb,
+  ChevronRight,
+} from 'lucide-react';
 import { SeverityBadge } from './SeverityBadge';
 
 interface RiskCardProps {
@@ -43,6 +49,14 @@ export function RiskCard({ risk, selected, onSelect }: RiskCardProps) {
           {formatPageLabel(risk.pageNumber)}
         </span>
       </div>
+
+      {risk.relatedPages && risk.relatedPages.length > 1 ? (
+        <p className="mt-2 inline-flex items-center gap-1.5 text-xs font-medium text-primary">
+          <GitCompareArrows className="size-3.5" aria-hidden="true" />
+          Cross-clause: involves{' '}
+          {risk.relatedPages.map(formatPageLabel).join(', ')}
+        </p>
+      ) : null}
 
       <p className="mt-2 text-sm leading-relaxed text-foreground/80">
         {risk.description}

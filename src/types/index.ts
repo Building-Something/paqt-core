@@ -9,6 +9,8 @@ export interface ContractRisk {
   recommendation: string;
   pageNumber: number;
   searchText: string;
+  relatedPages?: number[];
+  verified?: boolean;
 }
 
 export interface ContractAnalysis {

@@ -40,6 +40,11 @@ export function RiskMarker({ risk, number, selected, onSelect }: RiskMarkerProps
         </div>
         <p className="mt-1 text-xs font-semibold text-foreground">{risk.category}</p>
         <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{risk.description}</p>
+        {risk.relatedPages && risk.relatedPages.length > 1 ? (
+          <p className="mt-1 text-xs font-medium text-primary">
+            Involves {risk.relatedPages.map(formatPageLabel).join(', ')}
+          </p>
+        ) : null}
         <p className="mt-2 truncate text-xs italic text-muted-foreground/80">“{risk.text}”</p>
         <p className="mt-2 text-xs font-medium text-primary">Click for details</p>
       </div>

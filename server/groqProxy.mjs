@@ -7,6 +7,7 @@ const BODY_LIMIT = 20 * 1024 * 1024; // 20 MB
 const UPSTREAM_TIMEOUT_MS = 120_000; // 120 seconds
 const REASONING_EFFORT = 'low';
 const INCLUDE_REASONING = false;
+const REASONING_LEVELS = ['low', 'medium', 'high'];
 
 let apiKey = '';
 
@@ -199,12 +200,19 @@ export async function groqProxyHandler(req, res) {
     return;
   }
 
+  // Clamp to the model's supported set; fall back to the default for anything unknown.
+  const requestedEffort = body.reasoning_effort;
+  const reasoningEffort =
+    typeof requestedEffort === 'string' && REASONING_LEVELS.includes(requestedEffort)
+      ? requestedEffort
+      : REASONING_EFFORT;
+
   const upstreamBody = {
     model: GROQ_MODEL,
     messages: body.messages,
     temperature: clampNumber(body.temperature, 0.3, 0, 2),
     max_tokens: clampNumber(body.max_tokens, 4096, 1, 16384),
-    reasoning_effort: REASONING_EFFORT,
+    reasoning_effort: reasoningEffort,
     include_reasoning: INCLUDE_REASONING,
   };
 

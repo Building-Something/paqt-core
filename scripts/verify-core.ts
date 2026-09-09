@@ -7,6 +7,13 @@ import {
   deduplicateRisks,
   sortRisks,
 } from '../src/utils/risks';
+import {
+  normalizeQuoteText,
+  quoteMatchesPageText,
+  locateQuoteInPages,
+  verifyRisksAgainstPages,
+  keepVerifiedRisks,
+} from '../src/utils/riskVerify';
 import type { ContractRisk, PdfPage } from '../src/types';
 
 let failures = 0;
@@ -100,6 +107,19 @@ assert('heading-less draft chunks by paragraphs', introOnly.length >= 1 && intro
 const draftPages = buildDraftPages(draftSections);
 assert('draft pages include heading in text', draftPages[0].text.startsWith('Parties'));
 assert('draft page numbers sequential', draftPages.map((p) => p.pageNumber).join(',') === '1,2,3');
+
+// 5. Cross-clause quote verification
+const verPages = [
+  { pageNumber: 1, text: 'The Company shall indemnify the Client against all third-party claims arising from the Services provided under this Agreement.' },
+  { pageNumber: 2, text: 'Notwithstanding Section 1, the Client\u2019s exclusive remedy shall be a refund of fees paid, and all other remedies are waived.' },
+];
+assert('normalize quote text', normalizeQuoteText('  Net  \n 30 days  ') === 'net 30 days');
+assert('exact quote matches despite whitespace drift', quoteMatchesPageText('Client\u2019s exclusive remedy shall be a refund', verPages[1].text));
+assert('wrong page corrected via all-page fallback', locateQuoteInPages(verPages, 'exclusive remedy shall be a refund', 1)?.pageNumber === 2);
+const fabricated = verifyRisksAgainstPages(verPages, [{ text: 'fabricated invented clause nowhere in text', pageNumber: 2 }]);
+assert('unverifiable quote rejected', keepVerifiedRisks(fabricated).length === 0);
+const crossClause = verifyRisksAgainstPages(verPages, [{ text: 'exclusive remedy shall be a refund', pageNumber: 1, relatedPages: [2] }]);
+assert('cross-clause quote verified and re-pinned', keepVerifiedRisks(crossClause).length === 1 && crossClause[0].pageNumber === 2 && crossClause[0].relatedPages?.join(',') === '2');
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`);
 process.exit(failures === 0 ? 0 : 1);

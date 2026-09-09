@@ -70,6 +70,15 @@ export function normalizeRisks(raw: Partial<ContractRisk>[]): ContractRisk[] {
     const page = Number.isFinite(Number(safe.pageNumber))
       ? Math.max(1, Math.round(Number(safe.pageNumber)))
       : 1;
+    const relatedPages = Array.isArray(safe.relatedPages)
+      ? [
+          ...new Set(
+            safe.relatedPages
+              .map((value) => Math.round(Number(value)))
+              .filter((value) => Number.isFinite(value) && value >= 1),
+          ),
+        ].sort((a, b) => a - b)
+      : undefined;
     return {
       id: `tmp-${index}`,
       text: (safe.text || '').trim() || fallback.text,
@@ -80,6 +89,8 @@ export function normalizeRisks(raw: Partial<ContractRisk>[]): ContractRisk[] {
         (safe.recommendation || '').trim() || fallback.recommendation,
       pageNumber: page,
       searchText: (safe.searchText || '').trim() || extractSearchWords(safe.text),
+      relatedPages,
+      verified: typeof safe.verified === 'boolean' ? safe.verified : undefined,
     };
   });
 

@@ -4,3 +4,5 @@ export const PAGES_PER_BATCH = 8;
 export const BATCH_CHAR_LIMIT = 20_000;
 export const BATCH_MAX_TOKENS = 4_096;
 export const ANALYSIS_CONTEXT_LIMIT = 80_000;
+export const INTERACTION_FULL_TEXT_CHAR_LIMIT = 300_000;
+export const INTERACTION_MAX_TOKENS = 16_384;
