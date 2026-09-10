@@ -14,12 +14,7 @@ import { Button } from './ui/button';
 function Logo() {
   return (
     <Link to="/" className="flex items-center gap-2.5" aria-label="Paqt home">
-      <svg viewBox="0 0 32 32" className="size-7" aria-hidden="true">
-        <rect width="32" height="32" rx="8" fill="#2563eb" />
-        <path d="M11 8v16" stroke="#fff" strokeWidth="3.2" strokeLinecap="round" />
-        <path d="M21 8v16" stroke="#fff" strokeWidth="3.2" strokeLinecap="round" />
-        <path d="M11 16h10" stroke="#dbeafe" strokeWidth="3.2" strokeLinecap="round" />
-      </svg>
+      <img src="/assets/Logo-Variant-Transparent.png" alt="Paqt logo" className="size-7 object-contain" />
       <span className="text-lg font-semibold tracking-tight text-foreground">Paqt</span>
     </Link>
   );
