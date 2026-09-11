@@ -8,6 +8,7 @@ import {
   docSectionCount,
   docToMarkdown,
   markdownToDoc,
+  sectionContextAround,
 } from './contractDocument';
 
 const LEGAL_SAMPLE = [
@@ -88,6 +89,47 @@ describe('signature detection', () => {
   it('does not report signatures for an ordinary document', () => {
     const doc = markdownToDoc('# HEADER\n\nBody content only.\n');
     expect(docContainsSignatures(doc)).toBe(false);
+  });
+});
+
+describe('sectionContextAround', () => {
+  it('returns the section containing a selection inside a numbered section', () => {
+    const doc = markdownToDoc(LEGAL_SAMPLE);
+    const start = docToMarkdown(doc).indexOf('1.1 Provider');
+    const context = sectionContextAround(doc, start);
+    expect(context).toContain('1. SERVICES');
+    expect(context).toContain('1.1 Provider');
+    expect(context).toContain('Hosting configuration');
+    expect(context).not.toContain('FEES & PAYMENT');
+  });
+
+  it('returns preceding section context from a section without a heading', () => {
+    const doc = markdownToDoc(
+      '## 1. SERVICES\n\nPlain memory paragraph.\n\n## 2. FEES\n\nBody.\n',
+    );
+    const start = docToMarkdown(doc).indexOf('Plain memory paragraph');
+    const context = sectionContextAround(doc, start);
+    expect(context).toContain('1. SERVICES');
+    expect(context).toContain('Plain memory paragraph');
+    expect(context).not.toContain('FEES');
+  });
+
+  it('returns the preamble when no heading precedes the selection', () => {
+    const doc = markdownToDoc(
+      'Intro line about the deal.\n\n## 1. TERMS\n\nBody.\n',
+    );
+    const context = sectionContextAround(doc, 2);
+    expect(context).not.toContain('TERMS');
+    expect(context).toContain('Intro line');
+  });
+
+  it('truncates long sections to the given limit', () => {
+    const doc = markdownToDoc(
+      '## 1. LONG SECTION\n\n' + 'word '.repeat(600) + '\n',
+    );
+    const context = sectionContextAround(doc, 5, 100);
+    expect(context.length).toBeLessThanOrEqual(101);
+    expect(context.endsWith('…')).toBe(true);
   });
 });
 

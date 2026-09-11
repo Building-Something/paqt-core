@@ -99,3 +99,55 @@ export async function reviseContractDraft(
   ].join('\n\n');
   return groqTextRequest(REVISE_SYSTEM_PROMPT, userPrompt, DRAFT_MAX_TOKENS);
 }
+
+export type ClauseEditAction = 'rewrite' | 'simplify' | 'strengthen' | 'shorten';
+
+const CLAUSE_EDIT_MAX_TOKENS = 8192;
+
+const CLAUSE_EDIT_SYSTEM_PROMPT = [
+  'You are an expert contract drafter performing a targeted edit on part of a draft.',
+  'Rewrite ONLY the selected clause. Change nothing outside the selection.',
+  'Use the section context only for consistency (party names, currency, governing law, definitions).',
+  'Keep placeholders like [Client Full Legal Name] exactly as they are if they appear in the selection.',
+  'Keep any numbered labels, capitalization, and list formatting inside the selection consistent.',
+  'Return only the replacement text for the selected clause \u2014 no preamble, no explanation, no markdown headers.',
+  'Never fabricate facts; keep any unknown facts as placeholders.',
+  'Do not provide legal advice or add disclaimers in the output.',
+].join('\n');
+
+const CLAUSE_EDIT_INSTRUCTIONS: Record<ClauseEditAction, string> = {
+  rewrite:
+    'Rewrite this clause so it says the same thing in clearer, more precise legal language while staying consistent with the rest of the document.',
+  simplify:
+    'Simplify this clause into plainer English while preserving its exact legal meaning.',
+  strengthen:
+    'Rewrite this clause to be more favorable to the drafting party while remaining reasonable, balanced, and enforceable.',
+  shorten:
+    'Cut this clause to only the essential terms without changing its legal meaning.',
+};
+
+export async function rewriteSelectedClause(
+  action: ClauseEditAction,
+  selectedText: string,
+  sectionContext: string,
+): Promise<string> {
+  const userPrompt = [
+    `${CLAUSE_EDIT_INSTRUCTIONS[action]}`,
+    '',
+    `Section context:\n${sectionContext || '(none provided)'}`,
+    '',
+    `Selected clause:\n${selectedText}`,
+    '',
+    'Return ONLY the replacement text for the selected clause.',
+  ].join('\n');
+  const text = await groqTextRequest(
+    CLAUSE_EDIT_SYSTEM_PROMPT,
+    userPrompt,
+    CLAUSE_EDIT_MAX_TOKENS,
+  );
+  const cleaned = text.trim();
+  if (!cleaned) {
+    throw new Error('empty-rewrite');
+  }
+  return cleaned;
+}

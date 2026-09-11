@@ -23,7 +23,7 @@ export default tseslint.config(
         'warn',
         {
           allowConstantExport: true,
-          allowExportNames: ['useAnalysis', 'buttonVariants', 'badgeVariants'],
+          allowExportNames: ['useAnalysis', 'useSettings', 'buttonVariants', 'badgeVariants'],
         },
       ],
     },

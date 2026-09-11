@@ -14,6 +14,7 @@ import { useAnalysis } from '../contexts/AnalysisContext';
 import { formatRelativeTime, type HistoryEntry } from '../services/historyService';
 import { EmptyState } from '../components/EmptyState';
 import { Disclaimer } from '../components/Disclaimer';
+import { ReasoningEffortMenu } from '../components/ReasoningEffortMenu';
 import { ScoreBadge } from '../components/ScoreBadge';
 import { CheckpointList } from '../components/CheckpointList';
 import { Button } from '../components/ui/button';
@@ -170,6 +171,7 @@ export function DashboardPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <ReasoningEffortMenu />
           <Button variant="outline" asChild>
             <Link to="/generate">
               <FilePenLine className="size-4" aria-hidden="true" />

@@ -28,6 +28,14 @@ const pacer = new TokenPacer({ tokensPerMinute: CLIENT_TOKEN_BUDGET_PER_MINUTE }
 
 export type ReasoningEffort = 'low' | 'medium' | 'high';
 
+const DEFAULT_REASONING_EFFORT: ReasoningEffort = 'medium';
+
+let reasoningEffort: ReasoningEffort = DEFAULT_REASONING_EFFORT;
+
+export function setReasoningEffort(effort: ReasoningEffort): void {
+  reasoningEffort = effort;
+}
+
 interface GroqCompletionMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
@@ -196,7 +204,7 @@ export async function groqJsonRequest(
     ],
     temperature: 0.2,
     max_tokens: maxTokens,
-    reasoning_effort: options.reasonEffort,
+    reasoning_effort: options.reasonEffort ?? reasoningEffort,
     response_format:
       options.jsonMode === false
         ? undefined
@@ -218,6 +226,7 @@ export async function groqTextRequest(
     ],
     temperature,
     max_tokens: maxTokens,
+    reasoning_effort: reasoningEffort,
   });
 }
 
@@ -312,7 +321,6 @@ async function analyzePage(page: PdfPage): Promise<PageAnalysisOutcome> {
       JSON_SYSTEM_PROMPT,
       pageAnalysisPrompt(page),
       PER_PAGE_MAX_TOKENS,
-      { reasonEffort: 'medium' },
     );
   } catch (caught) {
     console.warn(`Page ${page.pageNumber} analysis skipped:`, caught);
@@ -405,14 +413,13 @@ async function runInteractionWindow(
       JSON_SYSTEM_PROMPT,
       interactionPrompt(text, risks),
       INTERACTION_MAX_TOKENS,
-      { reasonEffort: 'high' },
     );
   } catch {
     return groqJsonRequest(
       JSON_SYSTEM_PROMPT,
       interactionPrompt(text, risks),
       INTERACTION_MAX_TOKENS,
-      { reasonEffort: 'high', jsonMode: false },
+      { jsonMode: false },
     );
   }
 }

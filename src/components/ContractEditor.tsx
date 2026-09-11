@@ -5,6 +5,7 @@ import TextAlign from '@tiptap/extension-text-align';
 import { useEffect, useRef } from 'react';
 import { type ContractDocNode } from '../utils/contractDocument';
 import { ContractToolbar } from './ContractToolbar';
+import { ClauseEditMenu } from './ClauseEditMenu';
 
 interface ContractEditorProps {
   doc: ContractDocNode;
@@ -43,6 +44,7 @@ export function ContractEditor({ doc, contentKey = 0, editable = true, onChange 
 
   return (
     <div className="contract-sheet flex min-h-0 flex-1 flex-col">
+      {editable && editor ? <ClauseEditMenu editor={editor} /> : null}
       <ContractToolbar editor={editor} />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="px-6 py-8 sm:px-10">

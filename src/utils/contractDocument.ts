@@ -346,6 +346,83 @@ export function docContainsSignatures(node: ContractDocNode): boolean {
   return headings.some((heading) => /SIGNATURE|EXECUTION/i.test(docPlainText(heading)));
 }
 
+function nodeTextLength(node: ContractDocNode): number {
+  if (node.type === 'text') {
+    return (node.text ?? '').length;
+  }
+  if (node.type === 'hardBreak') {
+    return 1;
+  }
+  return (node.content ?? []).reduce((sum, child) => sum + nodeTextLength(child), 0);
+}
+
+function blockHeadingLevel(node: ContractDocNode): number | null {
+  if (node.type !== 'heading') {
+    return null;
+  }
+  return Number((node.attrs as { level?: number } | undefined)?.level ?? 1);
+}
+
+export function sectionContextAround(
+  doc: ContractDocNode,
+  from: number,
+  limit = 2400,
+): string {
+  const blocks = doc.content ?? [];
+  const offsets: { node: ContractDocNode; start: number; end: number }[] = [];
+  let cursor = 0;
+  for (const block of blocks) {
+    const length = nodeTextLength(block);
+    offsets.push({ node: block, start: cursor, end: cursor + length });
+    cursor += length;
+  }
+  if (offsets.length === 0) {
+    return '';
+  }
+
+  const anchor = Math.min(Math.max(from, 0), cursor);
+  const matched = offsets.findIndex(
+    (entry) => anchor >= entry.start && anchor <= entry.end,
+  );
+  const target = matched === -1 ? offsets.length - 1 : matched;
+
+  let startIndex = target;
+  let anchorLevel = blockHeadingLevel(offsets[target].node);
+  if (anchorLevel === null) {
+    for (let i = target - 1; i >= 0; i -= 1) {
+      const level = blockHeadingLevel(offsets[i].node);
+      if (level !== null) {
+        startIndex = i;
+        anchorLevel = level;
+        break;
+      }
+    }
+    if (anchorLevel === null) {
+      startIndex = 0;
+      anchorLevel = 0;
+    }
+  }
+
+  let endIndex = offsets.length - 1;
+  for (let i = startIndex + 1; i < offsets.length; i += 1) {
+    const level = blockHeadingLevel(offsets[i].node);
+    if (level !== null && (anchorLevel === 0 || level <= anchorLevel)) {
+      endIndex = i - 1;
+      break;
+    }
+  }
+
+  const selected = offsets
+    .slice(startIndex, endIndex + 1)
+    .filter((entry) => docPlainText(entry.node).trim().length > 0);
+  const markdown = selected.map((entry) => childToMarkdown(entry.node)).join('');
+  const cleaned = markdown.replace(/\n{3,}/g, '\n\n').trim();
+  if (cleaned.length <= limit) {
+    return cleaned;
+  }
+  return `${cleaned.slice(0, limit).trimEnd()}…`;
+}
+
 /* ------------------------------------------------------------------ */
 /* PDF document (pdfmake)                                              */
 /* ------------------------------------------------------------------ */

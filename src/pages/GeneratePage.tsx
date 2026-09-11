@@ -20,7 +20,6 @@ import { Disclaimer } from '../components/Disclaimer';
 import {
   type ContractDocNode,
   EMPTY_DOCUMENT,
-  docContainsSignatures,
   docToMarkdown,
   markdownToDoc,
 } from '../utils/contractDocument';
@@ -66,33 +65,6 @@ function errorMessage(error: unknown): string {
   return 'Something went wrong while drafting. Please try again.';
 }
 
-function SignaturePreview() {
-  const fields = (label: string) => (
-    <div className="space-y-6">
-      <p className="text-sm font-medium tracking-wide text-foreground">{label}</p>
-      {['By:', 'Name:', 'Title:', 'Date:'].map((field) => (
-        <div key={field}>
-          <p className="text-xs text-muted-foreground">{field}</p>
-          <div className="mt-1 border-b border-dotted border-muted-foreground/40" />
-        </div>
-      ))}
-    </div>
-  );
-  return (
-    <div className="px-6 py-10 sm:px-10">
-      <div className="border-t border-border pt-8 text-foreground">
-        <p className="text-sm text-muted-foreground">
-          Signature lines are rendered automatically in the PDF export.
-        </p>
-      </div>
-      <div className="mt-10 grid grid-cols-2 gap-12">
-        {fields('CLIENT')}
-        {fields('PROVIDER')}
-      </div>
-    </div>
-  );
-}
-
 export function GeneratePage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -112,7 +84,6 @@ export function GeneratePage() {
   const persistTimer = useRef<number | null>(null);
 
   const markdown = useMemo(() => docToMarkdown(doc), [doc]);
-  const hasSignatures = useMemo(() => docContainsSignatures(doc), [doc]);
   const sectionCount = useMemo(() => (markdown ? splitDraftIntoSections(markdown).length : 0), [markdown]);
 
   useEffect(() => {
@@ -562,7 +533,7 @@ const persistDraft = useCallback(
         </div>
 
         {/* Preview / editor column */}
-        <div className={phase === 'draft' ? 'order-1 min-w-0 lg:h-full' : 'min-w-0 order-1 lg:sticky lg:top-4'}>
+        <div className={phase === 'draft' ? 'order-1 min-w-0 min-h-0 overflow-y-auto lg:h-full' : 'min-w-0 order-1 lg:sticky lg:top-4'}>
           {phase === 'draft' ? (
             <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-card shadow-sm">
               <Suspense
@@ -574,7 +545,6 @@ const persistDraft = useCallback(
               >
                 <ContractEditor doc={doc} contentKey={contentKey} onChange={setDoc} />
               </Suspense>
-              {hasSignatures ? <SignaturePreview /> : null}
             </div>
           ) : (
             <div className="rounded-xl border border-border bg-card p-8 shadow-sm">
