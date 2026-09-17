@@ -628,14 +628,37 @@ function signatureTable(signatures?: ContractSignatures): PdfBlock {
 function docToPdfBlocks(node: ContractDocNode, signatures?: ContractSignatures): PdfBlock[] {
   const blocks: PdfBlock[] = [];
   let signaturePending = false;
+  let titleSkipped = false;
+  let inSignatureSection = false;
+  let signatureTableEmitted = false;
 
   const isDisclaimer = (segments: PdfTextSegment[]): boolean =>
     segments.map((segment) => segment.text).join('').replace(/\s+/g, ' ').trim() ===
     DRAFT_DISCLAIMER_LINE.replace(/\s+/g, ' ').trim();
 
+  const isSignatureField = (plain: string): boolean => {
+    if (!plain) {
+      return false;
+    }
+    if (/^[\s_\-–—.,]+$/.test(plain)) {
+      return true;
+    }
+    return (
+      /^(CLIENT|PROVIDER|BUYER|SELLER|CUSTOMER|SERVICE PROVIDER|DEVELOPER|COMPANY|CONTRACTOR|CONSULTANT|VENDOR|SUPPLIER|EMPLOYER|EMPLOYEE|FREELANCER|DESIGNER|AGENCY|TENANT|LANDLORD|OWNER|LICENSOR|LICENSEE|PART(Y|IES)|DATED|DATE|EXECUTED)\b/i.test(
+        plain,
+      ) ||
+      /^(By|Name|Title|Signature|Witness|Address|Email|Phone)\s*[:]?\b/i.test(plain)
+    );
+  };
+
+  const dropSignatureBlock = (): boolean => inSignatureSection && signatureTableEmitted;
+
   const visit = (child: ContractDocNode, listLevel = 0): void => {
     switch (child.type) {
       case 'paragraph': {
+        if (dropSignatureBlock()) {
+          break;
+        }
         const segments: PdfTextSegment[] = [];
         collectInline(child, segments);
         if (segments.length === 0) {
@@ -645,11 +668,22 @@ function docToPdfBlocks(node: ContractDocNode, signatures?: ContractSignatures):
         if (isDisclaimer(segments)) {
           break;
         }
+        if (inSignatureSection) {
+          const plain = segments
+            .map((segment) => segment.text)
+            .join('')
+            .replace(/\s+/g, ' ')
+            .trim();
+          if (isSignatureField(plain)) {
+            break;
+          }
+        }
         const alignment = (child.attrs as { textAlign?: 'left' | 'center' | 'right' | 'justify' } | undefined)
           ?.textAlign;
         blocks.push(blockParagraph(segments, alignment ?? 'justify'));
         if (signaturePending) {
           blocks.push(signatureTable(signatures));
+          signatureTableEmitted = true;
           signaturePending = false;
         }
         break;
@@ -658,11 +692,19 @@ function docToPdfBlocks(node: ContractDocNode, signatures?: ContractSignatures):
         const level = Number((child.attrs as { level?: number } | undefined)?.level ?? 1);
         const segments: PdfTextSegment[] = [];
         collectInline(child, segments);
+        const text = segments.map((segment) => segment.text).join('');
+        if (level === 1 && !titleSkipped) {
+          titleSkipped = true;
+          break;
+        }
         if (signaturePending) {
           blocks.push(signatureTable(signatures));
+          signatureTableEmitted = true;
           signaturePending = false;
         }
-        const text = segments.map((segment) => segment.text).join('');
+        if (level <= 2) {
+          inSignatureSection = SIGNATURE_HEADING.test(text);
+        }
         if (level === 2 && SIGNATURE_HEADING.test(text)) {
           signaturePending = true;
         }
@@ -683,6 +725,9 @@ function docToPdfBlocks(node: ContractDocNode, signatures?: ContractSignatures):
         }
         break;
       case 'blockquote': {
+        if (dropSignatureBlock()) {
+          break;
+        }
         const segments: PdfTextSegment[] = [];
         collectInline(child, segments);
         if (segments.length > 0) {
@@ -717,6 +762,7 @@ function docToPdfBlocks(node: ContractDocNode, signatures?: ContractSignatures):
   }
   if (signaturePending) {
     blocks.push(signatureTable(signatures));
+    signatureTableEmitted = true;
   }
   return blocks;
 }
@@ -753,14 +799,12 @@ export function buildContractPdfDoc(node: ContractDocNode, meta: ContractPdfMeta
       fontSize: 16,
       bold: true,
       alignment: 'center',
-      characterSpacing: 0.4,
       margin: [0, 0, 0, 12],
     },
     sectionHeading: {
       font: 'LiberationSerif',
       fontSize: 11.5,
       bold: true,
-      characterSpacing: 0.3,
       margin: [0, 14, 0, 7],
     },
     subHeading: {
@@ -800,13 +844,6 @@ export function buildContractPdfDoc(node: ContractDocNode, meta: ContractPdfMeta
       margin: [0, 4, 0, 8],
       lineHeight: 1.3,
     },
-    headerText: {
-      font: 'LiberationSerif',
-      fontSize: 8,
-      color: '#6b7280',
-      bold: true,
-      characterSpacing: 0.4,
-    },
   };
 
   return {
@@ -819,15 +856,6 @@ export function buildContractPdfDoc(node: ContractDocNode, meta: ContractPdfMeta
       keywords: 'contract, agreement, draft',
       creator: 'Paqt',
     },
-    header: (currentPage) =>
-      currentPage > 1
-        ? {
-            text: title.toUpperCase(),
-            style: 'headerText',
-            alignment: 'left',
-            margin: [72, 20, 72, 0] as [number, number, number, number],
-          }
-        : null,
     content: [
       {
         text: title.toUpperCase(),

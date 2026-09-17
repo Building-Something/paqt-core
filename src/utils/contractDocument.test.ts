@@ -167,15 +167,64 @@ describe('buildContractPdfDoc', () => {
     expect(JSON.stringify(pdf.content)).toContain('UNTITLED-AGREEMENT');
   });
 
-  it('provides a page >1 header renderer without a footer or draft watermark', () => {
+  it('renders the title exactly once and omits header and footer', () => {
     const doc = markdownToDoc(LEGAL_SAMPLE);
     const pdf = buildContractPdfDoc(doc, { fileName: 'freelance-developer-agreement' });
-    expect(typeof pdf.header).toBe('function');
+    const serialized = JSON.stringify(pdf.content);
+    expect(serialized.match(/FREELANCE DEVELOPER AGREEMENT/g)?.length).toBe(1);
+    expect(pdf.header).toBeUndefined();
     expect(pdf.footer).toBeUndefined();
-    const header1 = (pdf.header as (page: number) => unknown)(1);
-    expect(header1).toBeNull();
-    const header2 = (pdf.header as (page: number) => unknown)(2);
-    expect(JSON.stringify(header2)).not.toContain('DRAFT');
+  });
+
+  it('strips the model-written signature fields so only the signature table remains', () => {
+    const doc = markdownToDoc(
+      '# FREELANCE DEVELOPER AGREEMENT\n\n' +
+        '## 3. SIGNATURES\n\n' +
+        'IN WITNESS WHEREOF, the parties have executed this Agreement.\n\n' +
+        'CLIENT\n\n' +
+        'By: ____________________\n\n' +
+        'Name: [Client Full Legal Name]\n\n' +
+        'Title: [Client Title]\n\n' +
+        'Date: ____________________\n\n' +
+        'PROVIDER\n\n' +
+        'By: ____________________\n\n' +
+        'Name: [Provider Full Legal Name]\n\n' +
+        'Title: [Provider Title]\n\n' +
+        'Date: ____________________\n',
+    );
+    const pdf = buildContractPdfDoc(doc, { fileName: 'freelance-developer-agreement' });
+    const serialized = JSON.stringify(pdf.content);
+    expect(serialized).toContain('IN WITNESS WHEREOF');
+    const relevant = serialized.substring(serialized.indexOf('SIGNATURES'));
+    expect(relevant.match(/CLIENT/g)?.length).toBe(1);
+    expect(relevant.match(/PROVIDER/g)?.length).toBe(1);
+    expect(serialized).not.toContain('By: ____');
+    expect(serialized).not.toContain('Name: [Client');
+    expect(serialized).not.toContain('Title: [Client');
+  });
+
+  it('drops the per-party execution block after the signature table', () => {
+    const doc = markdownToDoc(
+      '# FREELANCE DEVELOPER AGREEMENT\n\n' +
+        '## 7. SIGNATURES\n\n' +
+        'IN WITNESS WHEREOF, the parties have executed this Agreement.\n\n' +
+        'Developer:\n\n' +
+        'Priyanshu Bhattacharjee\n\n' +
+        'Date: _________________________\n\n' +
+        'Client:\n\n' +
+        '[Authorized Signatory Name]\n' +
+        'Acme Corp\n\n' +
+        'Date: _________________________\n',
+    );
+    const pdf = buildContractPdfDoc(doc, { fileName: 'freelance-developer-agreement' });
+    const serialized = JSON.stringify(pdf.content);
+    expect(serialized).toContain('IN WITNESS WHEREOF');
+    expect(serialized).toContain('CLIENT');
+    expect(serialized).toContain('PROVIDER');
+    expect(serialized).not.toContain('Priyanshu');
+    expect(serialized).not.toContain('Acme Corp');
+    expect(serialized).not.toContain('Authorized Signatory');
+    expect(serialized).not.toContain('Date:');
   });
 
   it('omits the subtle draft filename subtitle', () => {
