@@ -333,7 +333,7 @@ const persistDraft = useCallback(
       <div
       className={
         phase === 'draft'
-          ? 'mt-4 grid h-[calc(100vh-6rem)] gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,400px)]'
+          ? 'mt-4 grid h-[calc(100vh-6rem)] gap-6 lg:h-[calc(100dvh-1rem)] lg:grid-cols-[minmax(0,1fr)_minmax(0,400px)]'
           : 'mt-8 grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,440px)] lg:items-start'
       }
     >
@@ -564,7 +564,7 @@ const persistDraft = useCallback(
         {/* Preview / editor column */}
         <div className={phase === 'draft' ? 'order-1 min-w-0 min-h-0 overflow-y-auto lg:h-full' : 'min-w-0 order-1 lg:sticky lg:top-4'}>
           {phase === 'draft' ? (
-            <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+            <div className="flex h-full min-h-0 flex-col overflow-hidden bg-card shadow-sm">
               <Suspense
                 fallback={
                   <div className="flex h-96 items-center justify-center">
