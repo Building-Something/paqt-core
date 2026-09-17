@@ -12,6 +12,7 @@ import {
   sectionContextAround,
   stripDraftDisclaimer,
 } from './contractDocument';
+import type { ContractDocNode } from './contractDocument';
 
 const LEGAL_SAMPLE = [
   '# FREELANCE DEVELOPER AGREEMENT',
@@ -54,6 +55,22 @@ describe('markdownToDoc', () => {
   it('turns empty markdown into an empty document', () => {
     const doc = markdownToDoc('');
     expect(doc.content).toEqual([{ type: 'paragraph' }]);
+  });
+
+  it('strips NUL and control characters from ingested markdown', () => {
+    expect(docPlainText(markdownToDoc('pre\u0000existing mock\u0000up designs'))).toBe(
+      'preexisting mockup designs',
+    );
+    expect(docPlainText(markdownToDoc('line\u0007feeds\u001Fand\ttabs'))).toBe('linefeedsand\ttabs');
+  });
+
+  it('strips characters the PDF fonts cannot render', () => {
+    expect(
+      docPlainText(
+        markdownToDoc('agreed\u2011upon cross\u2060browser mock\u200Bups test\uFFFD ok'),
+      ),
+    ).toBe('agreedupon crossbrowser mockups test ok');
+    expect(docPlainText(markdownToDoc('Good \uD83C\uDDFA\uD83C\uDDF8 day'))).toBe('Good  day');
   });
 });
 
@@ -201,6 +218,59 @@ describe('buildContractPdfDoc', () => {
     expect(serialized).not.toContain('By: ____');
     expect(serialized).not.toContain('Name: [Client');
     expect(serialized).not.toContain('Title: [Client');
+  });
+
+  it('strips NUL characters from PDF text runs even when they reach the builder directly', () => {
+    const doc: ContractDocNode = {
+      type: 'doc',
+      content: [
+        {
+          type: 'heading',
+          attrs: { level: 1 },
+          content: [{ type: 'text', text: 'DEFECT TITLE\u0000' }],
+        },
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: 'pre\u0000existing' },
+            { type: 'text', text: ' mock\u0000up designs' },
+          ],
+        },
+      ],
+    };
+    const pdf = buildContractPdfDoc(doc, { fileName: 'defect-title' });
+    const serialized = JSON.stringify(pdf.content);
+    expect(serialized).not.toContain('\\u0000');
+    expect(serialized).toContain('preexisting');
+    expect(serialized).toContain('mockup designs');
+  });
+
+  it('strips unmapped characters from PDF text runs and title', () => {
+    const doc: ContractDocNode = {
+      type: 'doc',
+      content: [
+        {
+          type: 'heading',
+          attrs: { level: 1 },
+          content: [{ type: 'text', text: 'TITLE\u2011OK' }],
+        },
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: 'agreed\u2011upon' },
+            { type: 'text', text: ' cross\u2060browser\u200Bok\u{1F600}' },
+          ],
+        },
+      ],
+    };
+    const pdf = buildContractPdfDoc(doc, { fileName: 't' });
+    const serialized = JSON.stringify(pdf.content);
+    expect(serialized).not.toContain('\\u2011');
+    expect(serialized).not.toContain('\\u200b');
+    expect(serialized).not.toContain('\\u2060');
+    expect(serialized).toContain('TITLEOK');
+    expect(serialized).toContain('agreedupon');
+    expect(serialized).toContain('crossbrowser');
   });
 
   it('drops the per-party execution block after the signature table', () => {

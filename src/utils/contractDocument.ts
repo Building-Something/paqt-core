@@ -3,6 +3,7 @@ import remarkParse from 'remark-parse';
 import remarkGfm from 'remark-gfm';
 import type { Root, Content as MdastContent } from 'mdast';
 import type { TDocumentDefinitions } from 'pdfmake/interfaces';
+import { FONT_SAFE_CODEPOINTS } from './fontSafeCodepoints';
 
 /**
  * A minimal, schema-agnostic representation of an editable document.
@@ -66,15 +67,31 @@ function inlineMarks(node: MdastContent): ContractMark[] {
   return result;
 }
 
+function sanitizeContractText(value: string): string {
+  let cleaned = '';
+  for (const char of value) {
+    const code = char.charCodeAt(0);
+    if (
+      code === 0x0009 ||
+      code === 0x000a ||
+      code === 0x000d ||
+      FONT_SAFE_CODEPOINTS.has(code)
+    ) {
+      cleaned += char;
+    }
+  }
+  return cleaned;
+}
+
 function mdastInline(node: MdastContent): string {
   if (!node || node.type === 'html' || node.type === 'image') {
     return '';
   }
   switch (node.type) {
     case 'text':
-      return (node as { value: string }).value;
+      return sanitizeContractText((node as { value: string }).value);
     case 'inlineCode':
-      return (node as { value: string }).value;
+      return sanitizeContractText((node as { value: string }).value);
     case 'break':
       return '\n';
     case 'link': {
@@ -481,7 +498,7 @@ function inlineToSegments(node: ContractDocNode): PdfTextSegment[] {
   if (node.type === 'hardBreak') {
     return [];
   }
-  const text = node.text ?? '';
+  const text = sanitizeContractText(node.text ?? '');
   const marks = node.marks ?? [];
   const types = new Set(marks.map((mark) => mark.type));
   const placeholder = /\[[A-Za-z][^\]\n]*\]/.test(text);
@@ -790,7 +807,7 @@ export function stripDraftDisclaimer(node: ContractDocNode): ContractDocNode {
 }
 
 export function buildContractPdfDoc(node: ContractDocNode, meta: ContractPdfMeta): TDocumentDefinitions {
-  const title = (docFirstHeading(node)?.trim() || meta.fileName || 'Agreement').trim();
+  const title = sanitizeContractText((docFirstHeading(node)?.trim() || meta.fileName || 'Agreement').trim());
   const contentBlocks = docToPdfBlocks(node, meta.signatures);
 
   const styles: TDocumentDefinitions['styles'] = {
