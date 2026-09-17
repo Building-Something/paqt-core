@@ -1,6 +1,7 @@
 import { groqJsonRequest, groqTextRequest } from './groqService';
 
-const DRAFT_MAX_TOKENS = 8192;
+const DRAFT_MAX_TOKENS = 16_384;
+const DRAFT_REASONING_EFFORT = 'low' as const;
 const MAX_QUESTIONS = 6;
 
 export interface DraftAnswers {
@@ -67,6 +68,7 @@ export async function askDraftingQuestions(brief: string): Promise<string[]> {
     QUESTIONS_SYSTEM_PROMPT,
     `${QUESTIONS_SCHEMA}\n\nAssignment brief:\n${brief}`,
     2048,
+    { reasonEffort: DRAFT_REASONING_EFFORT },
   );
 
   const parsed = raw as { questions?: unknown };
@@ -82,7 +84,9 @@ export async function askDraftingQuestions(brief: string): Promise<string[]> {
 
 export async function generateContractDraft(brief: string, answers: DraftAnswers): Promise<string> {
   const userPrompt = `Assignment brief:\n${brief}\n\nAdditional details:\n${formatAnswers(answers)}`;
-  return groqTextRequest(DRAFT_SYSTEM_PROMPT, userPrompt, DRAFT_MAX_TOKENS);
+  return groqTextRequest(DRAFT_SYSTEM_PROMPT, userPrompt, DRAFT_MAX_TOKENS, 0.4, {
+    reasonEffort: DRAFT_REASONING_EFFORT,
+  });
 }
 
 export async function reviseContractDraft(
@@ -97,7 +101,9 @@ export async function reviseContractDraft(
     `Current draft:\n${currentDraft}`,
     `Revision instruction:\n${instruction}`,
   ].join('\n\n');
-  return groqTextRequest(REVISE_SYSTEM_PROMPT, userPrompt, DRAFT_MAX_TOKENS);
+  return groqTextRequest(REVISE_SYSTEM_PROMPT, userPrompt, DRAFT_MAX_TOKENS, 0.4, {
+    reasonEffort: DRAFT_REASONING_EFFORT,
+  });
 }
 
 export type ClauseEditAction = 'rewrite' | 'simplify' | 'strengthen' | 'shorten';
@@ -144,6 +150,8 @@ export async function rewriteSelectedClause(
     CLAUSE_EDIT_SYSTEM_PROMPT,
     userPrompt,
     CLAUSE_EDIT_MAX_TOKENS,
+    0.4,
+    { reasonEffort: DRAFT_REASONING_EFFORT },
   );
   const cleaned = text.trim();
   if (!cleaned) {

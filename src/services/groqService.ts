@@ -218,6 +218,7 @@ export async function groqTextRequest(
   userPrompt: string,
   maxTokens = CHAT_MAX_TOKENS,
   temperature = 0.4,
+  options?: { reasonEffort?: ReasoningEffort },
 ): Promise<string> {
   return callGroq({
     messages: [
@@ -226,7 +227,7 @@ export async function groqTextRequest(
     ],
     temperature,
     max_tokens: maxTokens,
-    reasoning_effort: reasoningEffort,
+    reasoning_effort: options?.reasonEffort ?? reasoningEffort,
   });
 }
 
