@@ -60,7 +60,7 @@ export function normalizeRisks(raw: Partial<ContractRisk>[]): ContractRisk[] {
     riskLevel: 'low' as RiskLevel,
     category: 'Uncategorized',
     description: 'No description provided.',
-    recommendation: 'Review this clause with qualified counsel.',
+    recommendation: 'Review the clause carefully before proceeding.',
     pageNumber: 1,
   };
 

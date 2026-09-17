@@ -5,7 +5,6 @@ import { useAnalysis } from '../contexts/AnalysisContext';
 import { formatRelativeTime, type HistoryEntry } from '../services/historyService';
 import { UploadDropzone } from '../components/UploadDropzone';
 import { EmptyState } from '../components/EmptyState';
-import { Disclaimer } from '../components/Disclaimer';
 import { ScoreBadge } from '../components/ScoreBadge';
 import { CheckpointList } from '../components/CheckpointList';
 
@@ -127,10 +126,6 @@ export function AnalyzeHubPage() {
           )}
         </div>
       </section>
-
-      <div className="mt-12 border-t border-border pt-6">
-        <Disclaimer />
-      </div>
     </div>
   );
 }

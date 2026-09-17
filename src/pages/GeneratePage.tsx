@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -16,7 +16,6 @@ import { splitDraftIntoSections } from '../utils/draft';
 import { exportContractPdf } from '../services/pdfExportService';
 import { groqErrorMessage } from '../utils/risks';
 import { useAnalysis } from '../contexts/AnalysisContext';
-import { Disclaimer } from '../components/Disclaimer';
 import { SignaturePanel } from '../components/SignaturePanel';
 import {
   type ContractDocNode,
@@ -40,6 +39,30 @@ const EXAMPLES = [
 ];
 
 type Phase = 'brief' | 'questions' | 'draft';
+
+function SectionHeader({
+  icon,
+  title,
+  subtitle,
+}: {
+  icon: ReactNode;
+  title: string;
+  subtitle?: string;
+}) {
+  return (
+    <div className="flex items-start gap-2.5">
+      <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+        {icon}
+      </span>
+      <div className="min-w-0">
+        <h2 className="text-sm font-semibold leading-5 text-foreground">{title}</h2>
+        {subtitle ? (
+          <p className="mt-0.5 text-xs leading-5 text-muted-foreground">{subtitle}</p>
+        ) : null}
+      </div>
+    </div>
+  );
+}
 
 function draftSlug(brief: string): string {
   const words = brief
@@ -467,78 +490,74 @@ const persistDraft = useCallback(
           ) : null}
 
           {phase === 'draft' ? (
-            <>
-              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card p-4 shadow-sm">
-                <div>
-                  <p className="text-sm font-semibold text-foreground">
-                    Your draft is ready
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    {sectionCount} section{sectionCount === 1 ? '' : 's'} ·
-                    edit inline, then export or analyze. Every change is saved
-                    to history automatically.
-                  </p>
+            <div className="space-y-4">
+              <div className="divide-y divide-border rounded-xl border border-border bg-card shadow-sm">
+                {/* Status + actions */}
+                <div className="p-5">
+                  <SectionHeader
+                    icon={<Sparkles className="size-4" aria-hidden="true" />}
+                    title="Your draft is ready"
+                    subtitle={`${sectionCount} section${sectionCount === 1 ? '' : 's'} · edit inline, then export or analyze. Every change is saved to history automatically.`}
+                  />
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <Button variant="secondary" onClick={handleExportPdf} disabled={working || !markdown.trim()}>
+                      {working && busyMessage.startsWith('Preparing') ? (
+                        <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                      ) : (
+                        <FileDown className="size-4" aria-hidden="true" />
+                      )}
+                      Export PDF
+                    </Button>
+                    <Button onClick={handleAnalyze} disabled={working}>
+                      <ScanSearch className="size-4" aria-hidden="true" />
+                      Analyze for risks
+                    </Button>
+                  </div>
                 </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button variant="secondary" onClick={handleExportPdf} disabled={working || !markdown.trim()}>
-                    {working && busyMessage.startsWith('Preparing') ? (
-                      <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-                    ) : (
-                      <FileDown className="size-4" aria-hidden="true" />
-                    )}
-                    Export PDF
-                  </Button>
-                  <Button onClick={handleAnalyze} disabled={working}>
-                    <ScanSearch className="size-4" aria-hidden="true" />
-                    Analyze for risks
-                  </Button>
-                </div>
-              </div>
 
-              <div className="rounded-xl border border-border bg-card p-6 shadow-sm">
-                <h2 className="flex items-center gap-2 text-base font-semibold text-foreground">
-                  <RefreshCcw className="size-4 text-primary" aria-hidden="true" />
-                  Ask for a change
-                </h2>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Tell Paqt what to alter — payment terms, IP ownership, liability
-                  caps, an added clause — and the whole draft is updated
-                  consistently.
-                </p>
-                <textarea
-                  id="revision"
-                  rows={3}
-                  value={revision}
-                  disabled={working}
-                  onChange={(event) => setRevision(event.target.value)}
-                  placeholder='e.g. "Change Net-30 to a 25% deposit and Net-45 balance, and add a non-compete for 6 months."'
-                  className="mt-4 w-full resize-y rounded-md border border-input bg-background px-4 py-3 text-sm leading-relaxed shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 disabled:opacity-60"
-                />
-                <div className="mt-3 flex items-center justify-between gap-3">
-                  <Button onClick={handleRevise} disabled={!revision.trim() || working}>
+                {/* Ask for a change */}
+                <div className="p-5">
+                  <SectionHeader
+                    icon={<RefreshCcw className="size-4" aria-hidden="true" />}
+                    title="Ask for a change"
+                    subtitle="Tell Paqt what to alter — payment terms, IP ownership, liability caps, an added clause — and the whole draft is updated consistently."
+                  />
+                  <textarea
+                    id="revision"
+                    rows={3}
+                    value={revision}
+                    disabled={working}
+                    onChange={(event) => setRevision(event.target.value)}
+                    placeholder='e.g. "Change Net-30 to a 25% deposit and Net-45 balance, and add a non-compete for 6 months."'
+                    className="mt-4 w-full resize-y rounded-md border border-input bg-background px-4 py-3 text-sm leading-relaxed shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 disabled:opacity-60"
+                  />
+                  <div className="mt-3 flex items-center justify-between gap-3">
+                    <Button onClick={handleRevise} disabled={!revision.trim() || working}>
+                      {working ? (
+                        <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                      ) : (
+                        <RefreshCcw className="size-4" aria-hidden="true" />
+                      )}
+                      Revise draft
+                    </Button>
                     {working ? (
-                      <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-                    ) : (
-                      <RefreshCcw className="size-4" aria-hidden="true" />
-                    )}
-                    Revise draft
-                  </Button>
-                  {working ? (
-                    <p className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <Loader2 className="size-4 animate-spin text-primary" aria-hidden="true" />
-                      {busyMessage}
-                    </p>
-                  ) : null}
+                      <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                        <Loader2 className="size-4 animate-spin text-primary" aria-hidden="true" />
+                        {busyMessage}
+                      </p>
+                    ) : null}
+                  </div>
                 </div>
-              </div>
 
-              <SignaturePanel value={signatures} onChange={setSignatures} disabled={working} />
+                {/* Signatures */}
+                <SignaturePanel value={signatures} onChange={setSignatures} disabled={working} />
+              </div>
 
               <Button variant="ghost" className="w-full" onClick={resetToBrief}>
                 <ArrowLeft className="size-4" aria-hidden="true" />
                 Start a new brief
               </Button>
-            </>
+            </div>
           ) : null}
         </div>
 
@@ -615,12 +634,6 @@ const persistDraft = useCallback(
           )}
         </div>
       </div>
-
-      {phase !== 'draft' ? (
-        <div className="mt-10">
-          <Disclaimer />
-        </div>
-      ) : null}
     </div>
   );
 }

@@ -12,7 +12,6 @@ import { DraftViewer } from '../components/DraftViewer';
 import { ChatInterface } from '../components/ChatInterface';
 import { ExportButton } from '../components/ExportButton';
 import { ErrorState } from '../components/ErrorState';
-import { Disclaimer } from '../components/Disclaimer';
 import { Button } from '../components/ui/button';
 
 type MobileTab = 'summary' | 'document' | 'assistant';
@@ -188,9 +187,6 @@ export function AnalysisPage() {
             onRetry={error.retriable ? retryAnalysis : undefined}
             retryLabel="Retry analysis"
           />
-          <div className="mt-4">
-            <Disclaimer />
-          </div>
         </div>
       ) : !analysis ? (
         <div className="mx-auto w-full max-w-2xl px-4 py-10">
@@ -249,9 +245,6 @@ export function AnalysisPage() {
                     onSelectRisk={handleSelectRisk}
                   />
                 </section>
-                <div className="mt-6 border-t border-border pt-4">
-                  <Disclaimer />
-                </div>
               </div>
             </aside>
 
@@ -281,7 +274,6 @@ export function AnalysisPage() {
                 selectedRiskId={selectedRisk?.id ?? null}
                 onSelectRisk={handleSelectRisk}
               />
-              <Disclaimer />
             </div>
           ) : (
             <div className="lg:hidden">
@@ -317,7 +309,6 @@ export function AnalysisPage() {
                       onSelectRisk={handleSelectRisk}
                     />
                   </div>
-                  <Disclaimer />
                 </div>
               ) : null}
             </div>

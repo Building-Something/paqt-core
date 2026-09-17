@@ -185,10 +185,6 @@ export function ChatInterface({ disabled = false }: ChatInterfaceProps) {
             <SendHorizonal className="size-4" aria-hidden="true" />
           </Button>
         </div>
-        <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
-          Paqt’s answers are informational and may reference qualified legal
-          counsel.
-        </p>
       </form>
     </div>
   );

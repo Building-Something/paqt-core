@@ -72,39 +72,41 @@ function SignatureSlot({
   }
 
   return (
-    <div className="rounded-lg border border-border bg-muted/20 p-3">
+    <div className="rounded-lg border border-border bg-muted/20 p-4">
       <p className="text-xs font-semibold uppercase tracking-wide text-foreground">
         {party === 'client' ? 'Client' : 'Provider'}
       </p>
       {sig?.dataUrl ? (
-        <div className="mt-2">
-          <div className="flex items-center justify-between gap-2 rounded-md border border-border bg-background p-2">
-            <span className="inline-flex h-10 min-w-16 items-center justify-center rounded border border-dashed border-muted-foreground/30 bg-white px-2">
-              <img src={sig.dataUrl} alt={`${party} signature`} className="max-h-9 max-w-32 object-contain" />
+        <div className="mt-3">
+          <div className="flex items-center justify-between gap-2 rounded-md border border-border bg-background px-2 py-2">
+            <span className="inline-flex h-11 min-w-20 items-center justify-center rounded border border-dashed border-muted-foreground/30 bg-white px-2">
+              <img src={sig.dataUrl} alt={`${party} signature`} className="max-h-10 max-w-36 object-contain" />
             </span>
-            <button
-              type="button"
-              onClick={() => inputRef.current?.click()}
-              disabled={disabled}
-              title="Replace signature"
-              aria-label="Replace signature"
-              className="inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              <Upload className="size-3.5" aria-hidden="true" />
-              Replace
-            </button>
-            <button
-              type="button"
-              onClick={() => onChange(null)}
-              disabled={disabled}
-              title="Remove signature"
-              aria-label="Remove signature"
-              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              <Trash2 className="size-3.5" aria-hidden="true" />
-            </button>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => inputRef.current?.click()}
+                disabled={disabled}
+                title="Replace signature"
+                aria-label="Replace signature"
+                className="inline-flex h-9 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <Upload className="size-3.5" aria-hidden="true" />
+                Replace
+              </button>
+              <button
+                type="button"
+                onClick={() => onChange(null)}
+                disabled={disabled}
+                title="Remove signature"
+                aria-label="Remove signature"
+                className="inline-flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <Trash2 className="size-3.5" aria-hidden="true" />
+              </button>
+            </div>
           </div>
-          <label className="mt-2 block">
+          <label className="mt-3 block">
             <span className="text-xs font-medium text-foreground">Signed by (optional)</span>
             <input
               type="text"
@@ -112,7 +114,7 @@ function SignatureSlot({
               disabled={disabled}
               onChange={(event) => onChange({ ...sig, name: event.target.value })}
               placeholder="e.g. [Client Full Legal Name]"
-              className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 disabled:opacity-60"
+              className="mt-1.5 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 disabled:opacity-60"
             />
           </label>
         </div>
@@ -121,7 +123,7 @@ function SignatureSlot({
           type="button"
           onClick={() => inputRef.current?.click()}
           disabled={disabled}
-          className="mt-2 inline-flex h-9 w-full items-center justify-center gap-2 rounded-md border border-dashed border-muted-foreground/40 px-3 text-sm font-medium text-muted-foreground transition-colors hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-50"
+          className="mt-3 inline-flex h-10 w-full items-center justify-center gap-2 rounded-md border border-dashed border-muted-foreground/40 px-3 text-sm font-medium text-muted-foreground transition-colors hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Upload className="size-4" aria-hidden="true" />
           Upload signature
@@ -148,17 +150,23 @@ export function SignaturePanel({
   onChange,
   disabled = false,
 }: SignaturePanelProps) {
+  const savedNote = (value.client || value.provider) && !disabled;
+
   return (
-    <div className="rounded-xl border border-border bg-card p-4 shadow-sm">
-      <h2 className="flex items-center gap-2 text-base font-semibold text-foreground">
-        <FileSignature className="size-4 text-primary" aria-hidden="true" />
-        Add signatures
-      </h2>
-      <p className="mt-1 text-sm text-muted-foreground">
-        Upload an image of each signature and it will appear in the signature
-        area of the exported PDF.
-      </p>
-      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+    <div className="p-5">
+      <div className="flex items-start gap-2.5">
+        <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+          <FileSignature className="size-4" aria-hidden="true" />
+        </span>
+        <div className="min-w-0">
+          <h2 className="text-sm font-semibold leading-5 text-foreground">Add signatures</h2>
+          <p className="mt-0.5 text-xs leading-5 text-muted-foreground">
+            Upload an image of each signature and it will appear in the signature
+            area of the exported PDF.
+          </p>
+        </div>
+      </div>
+      <div className="mt-5 grid gap-3 sm:grid-cols-2">
         <SignatureSlot
           party="client"
           sig={value.client}
@@ -176,8 +184,8 @@ export function SignaturePanel({
           }
         />
       </div>
-      {(value.client || value.provider) && !disabled ? (
-        <p className="mt-3 flex items-center gap-1.5 text-xs text-muted-foreground">
+      {savedNote ? (
+        <p className="mt-4 flex items-center gap-1.5 text-xs text-muted-foreground">
           <Check className="size-3.5 text-emerald-600" aria-hidden="true" />
           Signatures are saved with this draft and included on export.
         </p>

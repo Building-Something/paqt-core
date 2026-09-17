@@ -13,7 +13,6 @@ import { useHistory } from '../hooks/useHistory';
 import { useAnalysis } from '../contexts/AnalysisContext';
 import { formatRelativeTime, type HistoryEntry } from '../services/historyService';
 import { EmptyState } from '../components/EmptyState';
-import { Disclaimer } from '../components/Disclaimer';
 import { ReasoningEffortMenu } from '../components/ReasoningEffortMenu';
 import { ScoreBadge } from '../components/ScoreBadge';
 import { CheckpointList } from '../components/CheckpointList';
@@ -309,10 +308,6 @@ export function DashboardPage() {
             )}
           </div>
         </section>
-      </div>
-
-      <div className="mt-12 border-t border-border pt-6">
-        <Disclaimer />
       </div>
     </div>
   );

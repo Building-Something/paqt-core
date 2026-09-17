@@ -1,6 +1,5 @@
 import { Link } from 'react-router-dom';
 import { ArrowRight, Server, ScanSearch, Shield } from 'lucide-react';
-import { Disclaimer } from '../components/Disclaimer';
 import { Card, CardContent } from '../components/ui/card';
 
 export function PrivacyPage() {
@@ -82,10 +81,6 @@ export function PrivacyPage() {
         optional saved sessions and team workspaces. Any changes to how data is
         stored or shared will update this page before rollout.
       </p>
-
-      <div className="mt-8">
-        <Disclaimer />
-      </div>
     </div>
   );
 }

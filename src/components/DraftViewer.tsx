@@ -179,10 +179,6 @@ export function DraftViewer({
             </section>
           ))}
 
-          <p className="px-2 pb-2 text-xs leading-relaxed text-muted-foreground">
-            This draft is a starting point, not legal advice. Have qualified
-            counsel review it before signing.
-          </p>
         </div>
       </div>
     </div>

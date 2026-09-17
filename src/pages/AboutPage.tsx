@@ -1,6 +1,5 @@
 import { Link } from 'react-router-dom';
 import { ArrowRight, FileSearch, ScrollText, Scale } from 'lucide-react';
-import { Disclaimer } from '../components/Disclaimer';
 import { Card, CardContent } from '../components/ui/card';
 
 const PRINCIPLES = [
@@ -20,7 +19,7 @@ const PRINCIPLES = [
     icon: Scale,
     title: 'Honest about its limits',
     description:
-      'Paqt is informational, not legal advice. It flags things worth attention and explains them plainly — final judgement stays with you and your counsel.',
+      'Paqt flags things worth attention and explains them plainly, so you can verify every finding against the document before acting.',
   },
 ];
 
@@ -71,10 +70,6 @@ export function AboutPage() {
           inspect: what matters, where it lives in the document, why it matters,
           and what you should do next. That difference is the whole point.
         </p>
-      </div>
-
-      <div className="mt-10">
-        <Disclaimer />
       </div>
     </div>
   );

@@ -618,7 +618,7 @@ function fallbackSynthesis(
     recommendations: [
       'Review the flagged clauses with the other party before signing.',
       'Ask Paqt to explain any risk in more detail.',
-      'Consider qualified legal counsel for consequential provisions.',
+      'Probe the worst-case outcome of each flagged clause before signing.',
     ],
   };
 }
@@ -797,7 +797,6 @@ export async function chatWithContract(
     '4. suggest questions or negotiation points where useful.',
     '5. never fabricate a clause.',
     '6. do not state that you provide legal advice.',
-    '7. recommend qualified legal counsel for consequential decisions.',
   ].join('\n');
 
   const analysisSummary = analysis.risks.length
