@@ -36,6 +36,10 @@ export function setReasoningEffort(effort: ReasoningEffort): void {
   reasoningEffort = effort;
 }
 
+export function getReasoningEffort(): ReasoningEffort {
+  return reasoningEffort;
+}
+
 interface GroqCompletionMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;

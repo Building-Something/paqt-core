@@ -1,8 +1,7 @@
-import { groqJsonRequest, groqTextRequest } from './groqService';
+import { groqJsonRequest, groqTextRequest, getReasoningEffort } from './groqService';
 import { DRAFT_DISCLAIMER_LINE } from '../utils/contractDocument';
 
 const DRAFT_MAX_TOKENS = 16_384;
-const DRAFT_REASONING_EFFORT = 'low' as const;
 const MAX_QUESTIONS = 6;
 
 export interface DraftAnswers {
@@ -75,7 +74,7 @@ export async function askDraftingQuestions(brief: string): Promise<string[]> {
     QUESTIONS_SYSTEM_PROMPT,
     `${QUESTIONS_SCHEMA}\n\nAssignment brief:\n${brief}`,
     2048,
-    { reasonEffort: DRAFT_REASONING_EFFORT },
+    { reasonEffort: getReasoningEffort() },
   );
 
   const parsed = raw as { questions?: unknown };
@@ -93,7 +92,7 @@ export async function generateContractDraft(brief: string, answers: DraftAnswers
   const userPrompt = `Assignment brief:\n${brief}\n\nAdditional details:\n${formatAnswers(answers)}`;
   return stripDraftBoilerplate(
     await groqTextRequest(DRAFT_SYSTEM_PROMPT, userPrompt, DRAFT_MAX_TOKENS, 0.4, {
-      reasonEffort: DRAFT_REASONING_EFFORT,
+      reasonEffort: getReasoningEffort(),
     }),
   );
 }
@@ -112,7 +111,7 @@ export async function reviseContractDraft(
   ].join('\n\n');
   return stripDraftBoilerplate(
     await groqTextRequest(REVISE_SYSTEM_PROMPT, userPrompt, DRAFT_MAX_TOKENS, 0.4, {
-      reasonEffort: DRAFT_REASONING_EFFORT,
+      reasonEffort: getReasoningEffort(),
     }),
   );
 }
@@ -162,7 +161,7 @@ export async function rewriteSelectedClause(
     userPrompt,
     CLAUSE_EDIT_MAX_TOKENS,
     0.4,
-    { reasonEffort: DRAFT_REASONING_EFFORT },
+    { reasonEffort: getReasoningEffort() },
   );
   const cleaned = stripDraftBoilerplate(text).trim();
   if (!cleaned) {
