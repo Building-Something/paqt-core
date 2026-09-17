@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { Check, FileSignature, Trash2, Upload } from 'lucide-react';
+import { Check, FileSignature, Upload } from 'lucide-react';
 import type { ContractSignature, ContractSignatures } from '../utils/contractDocument';
 
 interface SignaturePanelProps {
@@ -78,34 +78,16 @@ function SignatureSlot({
       </p>
       {sig?.dataUrl ? (
         <div className="mt-3">
-          <div className="flex items-center justify-between gap-2 rounded-md border border-border bg-background px-2 py-2">
-            <span className="inline-flex h-11 min-w-20 items-center justify-center rounded border border-dashed border-muted-foreground/30 bg-white px-2">
-              <img src={sig.dataUrl} alt={`${party} signature`} className="max-h-10 max-w-36 object-contain" />
-            </span>
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => inputRef.current?.click()}
-                disabled={disabled}
-                title="Replace signature"
-                aria-label="Replace signature"
-                className="inline-flex h-9 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                <Upload className="size-3.5" aria-hidden="true" />
-                Replace
-              </button>
-              <button
-                type="button"
-                onClick={() => onChange(null)}
-                disabled={disabled}
-                title="Remove signature"
-                aria-label="Remove signature"
-                className="inline-flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                <Trash2 className="size-3.5" aria-hidden="true" />
-              </button>
-            </div>
-          </div>
+          <button
+            type="button"
+            onClick={() => inputRef.current?.click()}
+            disabled={disabled}
+            title="Click to replace signature"
+            aria-label="Replace signature"
+            className="flex h-14 w-full items-center justify-center rounded-md border border-dashed border-muted-foreground/30 bg-white px-2 transition-colors hover:border-primary hover:bg-accent/50 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <img src={sig.dataUrl} alt={`${party} signature`} className="max-h-11 max-w-full object-contain" />
+          </button>
           <label className="mt-3 block">
             <span className="text-xs font-medium text-foreground">Signed by (optional)</span>
             <input
@@ -123,9 +105,9 @@ function SignatureSlot({
           type="button"
           onClick={() => inputRef.current?.click()}
           disabled={disabled}
-          className="mt-3 inline-flex h-10 w-full items-center justify-center gap-2 rounded-md border border-dashed border-muted-foreground/40 px-3 text-sm font-medium text-muted-foreground transition-colors hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-50"
+          className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-md border border-dashed border-muted-foreground/40 px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-50"
         >
-          <Upload className="size-4" aria-hidden="true" />
+          <Upload className="size-3.5" aria-hidden="true" />
           Upload signature
         </button>
       )}
