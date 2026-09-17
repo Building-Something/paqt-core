@@ -17,11 +17,14 @@ import { exportContractPdf } from '../services/pdfExportService';
 import { groqErrorMessage } from '../utils/risks';
 import { useAnalysis } from '../contexts/AnalysisContext';
 import { Disclaimer } from '../components/Disclaimer';
+import { SignaturePanel } from '../components/SignaturePanel';
 import {
   type ContractDocNode,
+  type ContractSignatures,
   EMPTY_DOCUMENT,
   docToMarkdown,
   markdownToDoc,
+  stripDraftDisclaimer,
 } from '../utils/contractDocument';
 import { createHistoryId, getHistoryEntry, upsertHistoryEntry } from '../services/historyService';
 import { Button } from '../components/ui/button';
@@ -75,6 +78,7 @@ export function GeneratePage() {
   const [questions, setQuestions] = useState<string[]>([]);
   const [answers, setAnswers] = useState<Record<number, string>>({});
   const [doc, setDoc] = useState<ContractDocNode>(EMPTY_DOCUMENT);
+  const [signatures, setSignatures] = useState<ContractSignatures>({});
   const [contentKey, setContentKey] = useState(0);
   const [revision, setRevision] = useState('');
   const [working, setWorking] = useState(false);
@@ -100,7 +104,8 @@ export function GeneratePage() {
       : markdownToDoc(entry.draftMarkdown ?? '');
     draftIdRef.current = id;
     setBrief(entry.draftBrief ?? entry.name);
-    setDoc(loadedDoc);
+    setDoc(stripDraftDisclaimer(loadedDoc));
+    setSignatures(entry.draftSignatures ?? {});
     setContentKey((current) => current + 1);
     setPhase('draft');
     setError(null);
@@ -124,10 +129,11 @@ const persistDraft = useCallback(
       draftBrief: brief,
       draftMarkdown: text,
       draftDoc: docJson,
+      draftSignatures: signatures,
       sectionCount: splitDraftIntoSections(text).length,
     });
   },
-  [brief],
+  [brief, signatures],
 );
 
   useEffect(() => {
@@ -145,12 +151,13 @@ const persistDraft = useCallback(
         window.clearTimeout(persistTimer.current);
       }
     };
-  }, [persistDraft, markdown, doc, phase, brief]);
+  }, [persistDraft, markdown, doc, phase, brief, signatures]);
 
   function applyDraft(text: string) {
-    setDoc(markdownToDoc(text));
+    const next = stripDraftDisclaimer(markdownToDoc(text));
+    setDoc(next);
     setContentKey((current) => current + 1);
-    persistDraft(text, JSON.stringify(markdownToDoc(text)));
+    persistDraft(text, JSON.stringify(next));
   }
 
   function resetToBrief() {
@@ -159,6 +166,7 @@ const persistDraft = useCallback(
     setQuestions([]);
     setAnswers({});
     setDoc(EMPTY_DOCUMENT);
+    setSignatures({});
     setRevision('');
     setError(null);
     setWorking(false);
@@ -243,7 +251,7 @@ const persistDraft = useCallback(
     setBusyMessage('Preparing your PDF…');
     setError(null);
     try {
-      await exportContractPdf(doc, { fileName: draftSlug(brief) });
+      await exportContractPdf(doc, { fileName: draftSlug(brief), signatures });
     } catch (caught) {
       setError('The PDF could not be generated. Please try again.');
       console.error('PDF export failed', caught);
@@ -523,6 +531,8 @@ const persistDraft = useCallback(
                   ) : null}
                 </div>
               </div>
+
+              <SignaturePanel value={signatures} onChange={setSignatures} disabled={working} />
 
               <Button variant="ghost" className="w-full" onClick={resetToBrief}>
                 <ArrowLeft className="size-4" aria-hidden="true" />

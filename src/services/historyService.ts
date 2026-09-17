@@ -1,4 +1,5 @@
 import type { ContractAnalysis } from '../types';
+import type { ContractSignatures } from '../utils/contractDocument';
 
 export type HistoryKind = 'analysis' | 'draft';
 
@@ -13,6 +14,7 @@ export interface HistoryEntry {
   draftBrief?: string;
   draftMarkdown?: string;
   draftDoc?: string;
+  draftSignatures?: ContractSignatures;
   analysis?: ContractAnalysis;
 }
 

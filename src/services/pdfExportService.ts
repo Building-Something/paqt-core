@@ -1,4 +1,8 @@
-import { buildContractPdfDoc, type ContractDocNode } from '../utils/contractDocument';
+import {
+  buildContractPdfDoc,
+  type ContractDocNode,
+  type ContractPdfMeta,
+} from '../utils/contractDocument';
 
 type PdfMakeApi = typeof import('pdfmake');
 
@@ -65,7 +69,7 @@ async function ensureFonts(api: PdfMakeApi): Promise<void> {
   return fontsReady;
 }
 
-export async function exportContractPdf(doc: ContractDocNode, meta: { fileName?: string }): Promise<void> {
+export async function exportContractPdf(doc: ContractDocNode, meta: ContractPdfMeta): Promise<void> {
   const mod = await import('pdfmake');
   const api = resolveApi(mod);
   await ensureFonts(api);

@@ -1,4 +1,5 @@
 import { groqJsonRequest, groqTextRequest } from './groqService';
+import { DRAFT_DISCLAIMER_LINE } from '../utils/contractDocument';
 
 const DRAFT_MAX_TOKENS = 16_384;
 const DRAFT_REASONING_EFFORT = 'low' as const;
@@ -41,7 +42,6 @@ const DRAFT_SYSTEM_PROMPT = [
   'Faithfully encode every concrete detail supplied in the brief (amounts, schedule, scope, Net-30 payments, currency, etc.).',
   'Never invent facts. For anything unknown and legally required, insert an explicit placeholder such as [Client Full Legal Name], [Provider Full Legal Name], [State or Country].',
   'Include a "Key assumptions" section listing every assumption you had to make.',
-  'End with the line: "This draft is a starting point, not legal advice. Have qualified counsel review it before signing."',
   'Return the contract as clean GitHub-style Markdown with no preamble and no code fences.',
 ].join('\n');
 
@@ -52,7 +52,6 @@ const REVISE_SYSTEM_PROMPT = [
   'Keep the numbered-section structure (`## 1. SECTION` / `### 1.1`) and do NOT introduce tables or code fences.',
   'Keep the `## SIGNATURES` section heading and the "IN WITNESS WHEREOF" paragraph.',
   'Keep placeholders like [Client Full Legal Name] where facts are still unknown.',
-  'Keep the final line: "This draft is a starting point, not legal advice. Have qualified counsel review it before signing."',
   'Return the complete revised contract as clean GitHub-style Markdown with no preamble and no code fences.',
 ].join('\n');
 
@@ -61,6 +60,14 @@ function formatAnswers(answers: DraftAnswers): string {
     .filter(([, value]) => typeof value === 'string' && value.trim().length > 0)
     .map(([key, value]) => `${Number(key) + 1}. ${value.trim()}`);
   return entries.length > 0 ? entries.join('\n') : 'None provided \u2014 draft using your own reasonable defaults and list them under Key assumptions.';
+}
+
+function stripDraftBoilerplate(text: string): string {
+  const lines = text.replace(/\r\n/g, '\n').split('\n');
+  const kept = lines.filter(
+    (line) => line.trim() !== DRAFT_DISCLAIMER_LINE.trim(),
+  );
+  return kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
 export async function askDraftingQuestions(brief: string): Promise<string[]> {
@@ -84,9 +91,11 @@ export async function askDraftingQuestions(brief: string): Promise<string[]> {
 
 export async function generateContractDraft(brief: string, answers: DraftAnswers): Promise<string> {
   const userPrompt = `Assignment brief:\n${brief}\n\nAdditional details:\n${formatAnswers(answers)}`;
-  return groqTextRequest(DRAFT_SYSTEM_PROMPT, userPrompt, DRAFT_MAX_TOKENS, 0.4, {
-    reasonEffort: DRAFT_REASONING_EFFORT,
-  });
+  return stripDraftBoilerplate(
+    await groqTextRequest(DRAFT_SYSTEM_PROMPT, userPrompt, DRAFT_MAX_TOKENS, 0.4, {
+      reasonEffort: DRAFT_REASONING_EFFORT,
+    }),
+  );
 }
 
 export async function reviseContractDraft(
@@ -101,9 +110,11 @@ export async function reviseContractDraft(
     `Current draft:\n${currentDraft}`,
     `Revision instruction:\n${instruction}`,
   ].join('\n\n');
-  return groqTextRequest(REVISE_SYSTEM_PROMPT, userPrompt, DRAFT_MAX_TOKENS, 0.4, {
-    reasonEffort: DRAFT_REASONING_EFFORT,
-  });
+  return stripDraftBoilerplate(
+    await groqTextRequest(REVISE_SYSTEM_PROMPT, userPrompt, DRAFT_MAX_TOKENS, 0.4, {
+      reasonEffort: DRAFT_REASONING_EFFORT,
+    }),
+  );
 }
 
 export type ClauseEditAction = 'rewrite' | 'simplify' | 'strengthen' | 'shorten';
@@ -153,7 +164,7 @@ export async function rewriteSelectedClause(
     0.4,
     { reasonEffort: DRAFT_REASONING_EFFORT },
   );
-  const cleaned = text.trim();
+  const cleaned = stripDraftBoilerplate(text).trim();
   if (!cleaned) {
     throw new Error('empty-rewrite');
   }

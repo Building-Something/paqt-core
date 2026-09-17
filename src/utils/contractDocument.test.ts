@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DRAFT_DISCLAIMER_LINE,
   EMPTY_DOCUMENT,
   buildContractPdfDoc,
   docContainsSignatures,
@@ -9,6 +10,7 @@ import {
   docToMarkdown,
   markdownToDoc,
   sectionContextAround,
+  stripDraftDisclaimer,
 } from './contractDocument';
 
 const LEGAL_SAMPLE = [
@@ -165,10 +167,53 @@ describe('buildContractPdfDoc', () => {
     expect(JSON.stringify(pdf.content)).toContain('UNTITLED-AGREEMENT');
   });
 
-  it('provides header and footer renderers for page numbering', () => {
+  it('provides a page >1 header renderer without a footer or draft watermark', () => {
     const doc = markdownToDoc(LEGAL_SAMPLE);
     const pdf = buildContractPdfDoc(doc, { fileName: 'freelance-developer-agreement' });
     expect(typeof pdf.header).toBe('function');
-    expect(typeof pdf.footer).toBe('function');
+    expect(pdf.footer).toBeUndefined();
+    const header1 = (pdf.header as (page: number) => unknown)(1);
+    expect(header1).toBeNull();
+    const header2 = (pdf.header as (page: number) => unknown)(2);
+    expect(JSON.stringify(header2)).not.toContain('DRAFT');
+  });
+
+  it('omits the subtle draft filename subtitle', () => {
+    const doc = markdownToDoc(LEGAL_SAMPLE);
+    const pdf = buildContractPdfDoc(doc, { fileName: 'create-a-5-000-freelance-developer-draft' });
+    const serialized = JSON.stringify(pdf.content);
+    expect(serialized).not.toContain('Create A 5 000');
+    expect(serialized).not.toContain('Create-A-5-000');
+  });
+
+  it('filters the "not legal advice" disclaimer from the PDF', () => {
+    const doc = markdownToDoc(
+      `${LEGAL_SAMPLE}\n\n${DRAFT_DISCLAIMER_LINE}\n`,
+    );
+    const pdf = buildContractPdfDoc(doc, { fileName: 'freelance-developer-agreement' });
+    expect(JSON.stringify(pdf.content)).not.toContain('not legal advice');
+  });
+
+  it('embeds uploaded signature images and signer names in the signature table', () => {
+    const doc = markdownToDoc(LEGAL_SAMPLE);
+    const pdf = buildContractPdfDoc(doc, {
+      fileName: 'freelance-developer-agreement',
+      signatures: {
+        client: { dataUrl: 'data:image/png;base64,AAAA', name: 'Ada Client' },
+        provider: { dataUrl: 'data:image/png;base64,BBBB', name: 'Bo Provider' },
+      },
+    });
+    const serialized = JSON.stringify(pdf.content);
+    expect(serialized).toContain('data:image/png;base64,AAAA');
+    expect(serialized).toContain('data:image/png;base64,BBBB');
+    expect(serialized).toContain('Ada Client');
+    expect(serialized).toContain('Bo Provider');
+  });
+
+  it('stripDraftDisclaimer removes the disclaimer paragraph', () => {
+    const doc = markdownToDoc(`${LEGAL_SAMPLE}\n\n${DRAFT_DISCLAIMER_LINE}\n`);
+    const stripped = stripDraftDisclaimer(doc);
+    expect(docPlainText(stripped)).not.toContain('not legal advice');
+    expect(docSectionCount(stripped)).toBe(4);
   });
 });
