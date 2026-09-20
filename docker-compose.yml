@@ -35,6 +35,9 @@ services:
       context: .
       dockerfile: Dockerfile
       target: frontend
+      args:
+        VITE_SUPABASE_URL: ${VITE_SUPABASE_URL}
+        VITE_SUPABASE_PUBLISHABLE_KEY: ${VITE_SUPABASE_PUBLISHABLE_KEY}
     image: paqt-frontend:latest
     depends_on:
       backend:
