@@ -1,4 +1,4 @@
-import type { ContractAnalysis } from '../types';
+import type { ContractAnalysis, PdfPage } from '../types';
 import type { ContractSignatures } from '../utils/contractDocument';
 
 export type HistoryKind = 'analysis' | 'draft';
@@ -16,10 +16,23 @@ export interface HistoryEntry {
   draftDoc?: string;
   draftSignatures?: ContractSignatures;
   analysis?: ContractAnalysis;
+  pageTexts?: PdfPage[];
+  previewPath?: string;
+  pdfPath?: string;
 }
 
-const STORAGE_KEY = 'paqt.history.v1';
+const GUEST_KEY = 'paqt.history.v1';
 const MAX_ENTRIES = 40;
+
+let currentUserId: string | null = null;
+
+function storageKey(): string {
+  return currentUserId ? `${GUEST_KEY}.${currentUserId}` : GUEST_KEY;
+}
+
+export function getBoundUserId(): string | null {
+  return currentUserId;
+}
 
 type HistoryListener = () => void;
 
@@ -47,21 +60,100 @@ function safeParse(raw: string | null): HistoryEntry[] {
   }
 }
 
-function read(): HistoryEntry[] {
+function readRaw(key: string): HistoryEntry[] {
   try {
-    return safeParse(window.localStorage.getItem(STORAGE_KEY));
+    return safeParse(window.localStorage.getItem(key));
   } catch {
     return [];
   }
 }
 
+function read(): HistoryEntry[] {
+  return readRaw(storageKey());
+}
+
 function write(entries: HistoryEntry[]) {
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
-    notify();
+    window.localStorage.setItem(storageKey(), JSON.stringify(entries));
   } catch {
     // Storage may be unavailable (private mode); history is best-effort.
   }
+  notify();
+  const userId = currentUserId;
+  if (userId) {
+    void import('./supabaseHistoryService').then((mod) =>
+      mod.upsertRemoteHistory(userId, entries),
+    );
+  }
+}
+
+function overlayFields(base: HistoryEntry, overlay: HistoryEntry): HistoryEntry {
+  const merged: Record<string, unknown> = { ...base };
+  for (const [key, value] of Object.entries(overlay as unknown as Record<string, unknown>)) {
+    if (value !== undefined) {
+      (merged as Record<string, unknown>)[key] = value;
+    }
+  }
+  return merged as unknown as HistoryEntry;
+}
+
+function mergedEntries(local: HistoryEntry[], remote: HistoryEntry[]): HistoryEntry[] {
+  const map = new Map<string, HistoryEntry>();
+  for (const entry of local) {
+    map.set(entry.id, entry);
+  }
+  for (const entry of remote) {
+    const base = map.get(entry.id);
+    map.set(entry.id, overlayFields(base ?? entry, entry));
+  }
+  return [...map.values()].sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+/**
+ * Binds the local history cache to a signed-in user and merges the account's
+ * cloud history. Any entries created while signed out (guest mode) are migrated
+ * into the account on first sign-in, then cleared from the guest key.
+ *
+ * The account's previous local cache is preserved across sign-out/sign-in, so
+ * reviews never disappear even if the cloud sync is temporarily unavailable.
+ */
+export async function bindHistoryToUser(userId: string, onReady?: () => void): Promise<void> {
+  if (currentUserId === userId) {
+    onReady?.();
+    return;
+  }
+  const guestEntries = readRaw(GUEST_KEY);
+  const cached = readRaw(`${GUEST_KEY}.${userId}`);
+  currentUserId = userId;
+
+  let remote: HistoryEntry[] = [];
+  try {
+    const mod = await import('./supabaseHistoryService');
+    remote = await mod.fetchRemoteHistory(userId);
+  } catch {
+    remote = [];
+  }
+
+  const merged = mergedEntries([...guestEntries, ...cached], remote);
+  write(merged);
+  if (guestEntries.length > 0) {
+    try {
+      window.localStorage.removeItem(GUEST_KEY);
+    } catch {
+      // Best-effort cleanup.
+    }
+  }
+  onReady?.();
+}
+
+export function unbindHistoryToUser(): void {
+  if (!currentUserId) {
+    return;
+  }
+  // Keep the account's local cache (scoped to this user id) so re-signing in on
+  // this device restores past reviews even before the cloud sync has merged.
+  currentUserId = null;
+  notify();
 }
 
 export function createHistoryId(prefix: string): string {
@@ -97,11 +189,19 @@ export function upsertHistoryEntry(entry: HistoryEntry, max = MAX_ENTRIES): Hist
 export function deleteHistoryEntry(id: string): HistoryEntry[] {
   const next = read().filter((entry) => entry.id !== id);
   write(next);
+  const userId = currentUserId;
+  if (userId) {
+    void import('./supabaseHistoryService').then((mod) => mod.removeRemoteHistory(userId, id));
+  }
   return next;
 }
 
 export function clearHistory(): HistoryEntry[] {
   write([]);
+  const userId = currentUserId;
+  if (userId) {
+    void import('./supabaseHistoryService').then((mod) => mod.clearRemoteHistory(userId));
+  }
   return [];
 }
 

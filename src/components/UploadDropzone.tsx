@@ -1,6 +1,7 @@
 import { useState, type DragEvent, type ChangeEvent, useRef } from 'react';
-import { FileText, UploadCloud, X } from 'lucide-react';
+import { ScanSearch, UploadCloud, X } from 'lucide-react';
 import { Button } from './ui/button';
+import { SuccessCheck } from './ui/feedback';
 
 interface UploadDropzoneProps {
   onFileSelected: (file: File) => void;
@@ -125,17 +126,25 @@ export function UploadDropzone({ onFileSelected, busy = false }: UploadDropzoneP
       ) : null}
 
       {pendingFile ? (
-        <div className="card mt-4 flex items-center gap-3 p-3">
-          <div className="rounded-md bg-muted p-2 text-muted-foreground">
-            <FileText className="size-5" aria-hidden="true" />
+        <div className="card animate-fade-in-up mt-4 flex items-center gap-3 border-low-500/40 p-3">
+          <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-low-500/10 text-low-600 dark:text-low-500">
+            <SuccessCheck className="size-6" />
           </div>
           <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-medium text-foreground">{pendingFile.name}</p>
+            <p className="flex items-center gap-2 truncate text-sm font-medium text-foreground">
+              <span>{pendingFile.name}</span>
+              <span className="shrink-0 text-xs font-medium text-low-600 dark:text-low-500">
+                Ready to review
+              </span>
+            </p>
             <p className="text-xs text-muted-foreground">
               {(pendingFile.size / 1024 / 1024).toFixed(2)} MB
             </p>
           </div>
-          <Button onClick={confirm}>Analyze</Button>
+          <Button onClick={confirm}>
+            <ScanSearch className="size-4" aria-hidden="true" />
+            Analyze
+          </Button>
           <button
             type="button"
             onClick={cancel}

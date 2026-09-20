@@ -12,10 +12,13 @@ import {
 import { useHistory } from '../hooks/useHistory';
 import { useAnalysis } from '../contexts/AnalysisContext';
 import { formatRelativeTime, type HistoryEntry } from '../services/historyService';
+import type { RiskLevel } from '../types';
 import { EmptyState } from '../components/EmptyState';
 import { ReasoningEffortMenu } from '../components/ReasoningEffortMenu';
 import { ScoreBadge } from '../components/ScoreBadge';
 import { CheckpointList } from '../components/CheckpointList';
+import { PreviewThumb } from '../components/PreviewThumb';
+import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Card } from '../components/ui/card';
 
@@ -24,25 +27,131 @@ function StatCard({
   label,
   value,
   hint,
+  tone,
 }: {
   icon: typeof Gauge;
   label: string;
   value: number | string;
   hint: string;
+  tone: string;
 }) {
   return (
-    <Card className="flex items-start gap-3 p-4">
-      <div className="rounded-md bg-muted p-2 text-muted-foreground">
+    <div className="rounded-xl border border-border bg-card p-4 shadow-sm transition-colors hover:border-primary/30">
+      <div className={`flex size-9 items-center justify-center rounded-lg ${tone}`}>
         <Icon className="size-4" aria-hidden="true" />
       </div>
-      <div className="min-w-0">
-        <p className="truncate text-2xl font-semibold tabular-nums tracking-tight text-foreground">
-          {value}
-        </p>
-        <p className="text-xs font-medium text-muted-foreground">{label}</p>
-        <p className="mt-0.5 text-[11px] text-muted-foreground/70">{hint}</p>
+      <p className="mt-3 truncate text-2xl font-semibold tabular-nums tracking-tight text-foreground">
+        {value}
+      </p>
+      <p className="text-xs font-medium text-muted-foreground">{label}</p>
+      <p className="mt-0.5 text-[11px] text-muted-foreground/60">{hint}</p>
+    </div>
+  );
+}
+
+const SEVERITY_LEVELS: Array<{ key: RiskLevel; label: string; bar: string }> = [
+  { key: 'critical', label: 'Critical', bar: 'bg-critical-500' },
+  { key: 'high', label: 'High', bar: 'bg-high-500' },
+  { key: 'medium', label: 'Medium', bar: 'bg-medium-500' },
+  { key: 'low', label: 'Low', bar: 'bg-low-500' },
+];
+
+function SeverityCard({ analyses }: { analyses: HistoryEntry[] }) {
+  const counts: Record<RiskLevel, number> = { critical: 0, high: 0, medium: 0, low: 0 };
+  for (const entry of analyses) {
+    for (const risk of entry.analysis?.risks ?? []) {
+      counts[risk.riskLevel] += 1;
+    }
+  }
+  const total = SEVERITY_LEVELS.reduce((sum, level) => sum + counts[level.key], 0);
+
+  return (
+    <Card className="p-5">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-sm font-semibold text-foreground">Risk distribution</h2>
+        <span className="text-xs text-muted-foreground">
+          {total} finding{total === 1 ? '' : 's'}
+        </span>
       </div>
+
+      <div className="mt-4 flex h-2 w-full overflow-hidden rounded-full bg-muted" aria-hidden="true">
+        {SEVERITY_LEVELS.map((level) => {
+          const pct = total > 0 ? (counts[level.key] / total) * 100 : 0;
+          return pct > 0 ? (
+            <div key={level.key} className={level.bar} style={{ width: `${pct}%` }} />
+          ) : null;
+        })}
+      </div>
+
+      <ul className="mt-4 flex flex-col gap-2.5">
+        {SEVERITY_LEVELS.map((level) => (
+          <li key={level.key} className="flex items-center gap-2.5">
+            <span className={`size-2 rounded-full ${level.bar}`} aria-hidden="true" />
+            <span className="text-xs font-medium text-muted-foreground">{level.label}</span>
+            <span className="ml-auto text-sm font-semibold tabular-nums text-foreground">
+              {counts[level.key]}
+            </span>
+          </li>
+        ))}
+      </ul>
     </Card>
+  );
+}
+
+function QuickActions() {
+  return (
+    <section>
+      <h2 className="text-sm font-semibold text-foreground">Start something</h2>
+      <div className="mt-3 flex flex-col gap-3">
+        <Card className="p-5">
+          <div className="flex items-center gap-3">
+            <span className="text-xs font-semibold tracking-[0.2em] text-primary">01</span>
+            <div className="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <ScanSearch className="size-4" aria-hidden="true" />
+            </div>
+          </div>
+          <p className="mt-3 text-sm font-semibold text-foreground">Review a contract</p>
+          <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+            Upload a PDF and Paqt flags the clauses worth your attention, with the exact page and
+            quote behind each finding.
+          </p>
+          <Button asChild className="mt-4">
+            <Link to="/analyze">
+              Upload a PDF
+              <ArrowRight className="size-4" aria-hidden="true" />
+            </Link>
+          </Button>
+        </Card>
+
+        <Card className="p-5">
+          <div className="flex items-center gap-3">
+            <span className="text-xs font-semibold tracking-[0.2em] text-primary">02</span>
+            <div className="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <FilePenLine className="size-4" aria-hidden="true" />
+            </div>
+          </div>
+          <p className="mt-3 text-sm font-semibold text-foreground">Compose an agreement</p>
+          <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+            Describe the deal in plain English. Paqt asks clarifying questions, drafts the
+            agreement, and rewrites it from your feedback — then analyzes it for risks.
+          </p>
+          <Button asChild className="mt-4">
+            <Link to="/generate">
+              Start drafting
+              <ArrowRight className="size-4" aria-hidden="true" />
+            </Link>
+          </Button>
+        </Card>
+
+        <div className="rounded-xl border border-primary/15 bg-primary/5 px-4 py-3">
+          <p className="text-xs leading-relaxed text-primary/90">
+            Your reviews sync to your account. History stores compact summaries and small page
+            previews, never the raw PDF — so reopening results stays instant and storage stays
+            lean across thousands of contracts.
+          </p>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -60,45 +169,52 @@ function ActivityRow({
   const score = entry.analysis?.overallRiskScore ?? null;
 
   return (
-    <li>
-      <div
-        role="button"
-        tabIndex={0}
-        onClick={() => onOpen(entry)}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault();
-            onOpen(entry);
-          }
-        }}
-        aria-label={`Open ${entry.name}`}
-        className="group flex cursor-pointer items-center gap-3 rounded-lg border border-border bg-card px-4 py-3 shadow-sm transition-colors hover:bg-accent/60"
-      >
-        <div className={`rounded-md p-2 ${isDraft ? 'bg-muted text-primary' : 'bg-muted text-muted-foreground'}`}>
-          {isDraft ? (
-            <FilePenLine className="size-4" aria-hidden="true" />
+    <tr onClick={() => onOpen(entry)} className="group cursor-pointer transition-colors hover:bg-accent/40">
+      <td className="px-4 py-3">
+        <div className="flex min-w-0 items-center gap-3">
+          {!isDraft && entry.previewPath ? (
+            <PreviewThumb path={entry.previewPath} />
           ) : (
-            <FileText className="size-4" aria-hidden="true" />
+            <div
+              className={`flex size-8 shrink-0 items-center justify-center rounded-lg ${
+                isDraft ? 'bg-high-100 text-high-700 dark:bg-high-500/15 dark:text-high-500' : 'bg-primary/10 text-primary'
+              }`}
+            >
+              {isDraft ? (
+                <FilePenLine className="size-4" aria-hidden="true" />
+              ) : (
+                <FileText className="size-4" aria-hidden="true" />
+              )}
+            </div>
           )}
+          <div className="min-w-0">
+            <p className="truncate text-sm font-medium text-foreground">{entry.name}</p>
+            <p className="text-xs text-muted-foreground">
+              {isDraft
+                ? entry.sectionCount
+                  ? `${entry.sectionCount} sections`
+                  : 'Agreement draft'
+                : entry.pageCount
+                  ? `${entry.pageCount} pages · ${risks} risk${risks === 1 ? '' : 's'}`
+                  : `${risks} risk${risks === 1 ? '' : 's'}`}
+            </p>
+          </div>
         </div>
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium text-foreground">{entry.name}</p>
-          <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-            <span>{formatRelativeTime(entry.updatedAt)}</span>
-            {!isDraft && risks > 0 ? (
-              <span className="text-muted-foreground/70">
-                {risks} risk{risks === 1 ? '' : 's'}
-              </span>
-            ) : null}
-            {!isDraft && score !== null ? (
-              <ScoreBadge score={score} />
-            ) : isDraft && entry.sectionCount ? (
-              <span className="text-muted-foreground/70">
-                {entry.sectionCount} section{entry.sectionCount === 1 ? '' : 's'}
-              </span>
-            ) : null}
-          </p>
-        </div>
+      </td>
+      <td className="px-4 py-3">
+        <Badge variant={isDraft ? 'outline' : 'secondary'}>{isDraft ? 'Draft' : 'Review'}</Badge>
+      </td>
+      <td className="px-4 py-3 text-right">
+        {score !== null ? (
+          <ScoreBadge score={score} />
+        ) : (
+          <span className="text-sm text-muted-foreground/50">—</span>
+        )}
+      </td>
+      <td className="px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">
+        {formatRelativeTime(entry.updatedAt)}
+      </td>
+      <td className="px-2 py-3 text-right">
         <button
           type="button"
           onClick={(event) => {
@@ -106,12 +222,60 @@ function ActivityRow({
             onDelete(entry.id);
           }}
           aria-label={`Delete ${entry.name}`}
-          className="shrink-0 rounded-md p-2 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+          className="rounded-md p-2 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
         >
           <Trash2 className="size-4" aria-hidden="true" />
         </button>
-      </div>
-    </li>
+      </td>
+    </tr>
+  );
+}
+
+function ActivityTable({
+  entries,
+  onOpen,
+  onDelete,
+}: {
+  entries: HistoryEntry[];
+  onOpen: (entry: HistoryEntry) => void;
+  onDelete: (id: string) => void;
+}) {
+  if (entries.length === 0) {
+    return (
+      <EmptyState
+        title="Nothing here yet"
+        description="Analyses you run and contracts you compose will appear here for quick reopening, synced to your account."
+      />
+    );
+  }
+
+  return (
+    <div className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+      <table className="w-full text-left">
+        <thead>
+          <tr className="border-b border-border bg-muted/40">
+            <th className="px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Item
+            </th>
+            <th className="px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Type
+            </th>
+            <th className="px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Score
+            </th>
+            <th className="px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Updated
+            </th>
+            <th className="w-12 px-2 py-2.5" aria-hidden="true" />
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-border">
+          {entries.map((entry) => (
+            <ActivityRow key={entry.id} entry={entry} onOpen={onOpen} onDelete={onDelete} />
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -145,6 +309,12 @@ export function DashboardPage() {
     progress.stage !== 'complete' &&
     progress.stage !== 'error';
 
+  const today = new Date().toLocaleDateString(undefined, {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+  });
+
   function handleOpen(entry: HistoryEntry) {
     if (entry.kind === 'draft') {
       navigate(`/generate?draft=${entry.id}`);
@@ -156,12 +326,12 @@ export function DashboardPage() {
   const recent = entries.slice(0, 8);
 
   return (
-    <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6 sm:py-12">
+    <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:py-8">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <p className="text-sm font-medium text-muted-foreground">Contract workspace</p>
+          <p className="text-sm font-medium text-muted-foreground">{today}</p>
           <h1 className="mt-1 text-3xl font-semibold tracking-tight text-foreground">
-            Review, draft, decide.
+            Deal room
           </h1>
           <p className="mt-2 max-w-xl text-sm leading-relaxed text-muted-foreground">
             Analyze incoming contracts for risks, or compose agreements from a
@@ -189,7 +359,7 @@ export function DashboardPage() {
       {fileName || record ? (
         <div className="mt-6 flex flex-wrap items-center gap-3 rounded-lg border border-border bg-card px-4 py-3 shadow-sm">
           <div className="flex min-w-0 items-center gap-2.5">
-            <div className="rounded-md bg-muted p-2 text-primary">
+            <div className="rounded-md bg-primary/10 p-2 text-primary">
               <ScanSearch className="size-4" aria-hidden="true" />
             </div>
             <div className="min-w-0">
@@ -212,68 +382,45 @@ export function DashboardPage() {
 
       <CheckpointList />
 
-      <section className="mt-8 grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-3 xl:grid-cols-5">
-        <StatCard icon={FileText} label="Contracts analyzed" value={analyses.length} hint="Completed reviews" />
-        <StatCard icon={Activity} label="Risks flagged" value={riskTotal} hint="Across all reviews" />
-        <StatCard icon={ShieldAlert} label="Critical / high" value={highRisk} hint="Needs attention" />
-        <StatCard icon={FilePenLine} label="Drafts composed" value={drafts.length} hint="Agreements drafted" />
+      <section className="mt-6 grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-3 xl:grid-cols-5">
+        <StatCard
+          icon={FileText}
+          label="Contracts reviewed"
+          value={analyses.length}
+          hint="Completed reviews"
+          tone="bg-primary/10 text-primary"
+        />
+        <StatCard
+          icon={Activity}
+          label="Risks flagged"
+          value={riskTotal}
+          hint="Across all reviews"
+          tone="bg-medium-100 text-medium-700 dark:bg-medium-500/15 dark:text-medium-500"
+        />
+        <StatCard
+          icon={ShieldAlert}
+          label="Critical / high"
+          value={highRisk}
+          hint="Needs attention"
+          tone="bg-critical-100 text-critical-700 dark:bg-critical-500/15 dark:text-critical-500"
+        />
+        <StatCard
+          icon={FilePenLine}
+          label="Drafts composed"
+          value={drafts.length}
+          hint="Agreements drafted"
+          tone="bg-high-100 text-high-700 dark:bg-high-500/15 dark:text-high-500"
+        />
         <StatCard
           icon={Gauge}
           label="Avg. risk score"
           value={avgScore ?? '—'}
           hint="Higher means riskier"
+          tone="bg-low-100 text-low-600 dark:bg-low-500/15 dark:text-low-500"
         />
       </section>
 
-      <div className="mt-10 grid gap-6 lg:grid-cols-[1fr_1.6fr]">
-        <section>
-          <h2 className="text-sm font-semibold text-foreground">Start something</h2>
-          <div className="mt-3 flex flex-col gap-3">
-            <Card className="p-5">
-              <div className="flex items-start gap-3">
-                <div className="rounded-md bg-muted p-2 text-primary">
-                  <ScanSearch className="size-4" aria-hidden="true" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-foreground">Analyze a contract</p>
-                  <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-                    Upload a PDF and Paqt flags the clauses worth your attention,
-                    with the exact page and quote behind each finding.
-                  </p>
-                  <Button asChild className="mt-4">
-                    <Link to="/analyze">
-                      Upload a PDF
-                      <ArrowRight className="size-4" aria-hidden="true" />
-                    </Link>
-                  </Button>
-                </div>
-              </div>
-            </Card>
-
-            <Card className="p-5">
-              <div className="flex items-start gap-3">
-                <div className="rounded-md bg-muted p-2 text-primary">
-                  <FilePenLine className="size-4" aria-hidden="true" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-foreground">Compose a contract</p>
-                  <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-                    Describe the deal in plain English. Paqt asks clarifying
-                    questions, drafts the agreement, and rewrites it from your
-                    feedback — then analyzes it for risks.
-                  </p>
-                  <Button asChild className="mt-4">
-                    <Link to="/generate">
-                      Start drafting
-                      <ArrowRight className="size-4" aria-hidden="true" />
-                    </Link>
-                  </Button>
-                </div>
-              </div>
-            </Card>
-          </div>
-        </section>
-
+      <div className="mt-8 grid gap-6 lg:grid-cols-[1.6fr_1fr]">
         <section>
           <div className="flex items-center justify-between gap-3">
             <h2 className="text-sm font-semibold text-foreground">Recent activity</h2>
@@ -289,25 +436,14 @@ export function DashboardPage() {
           </div>
 
           <div className="mt-3">
-            {recent.length === 0 ? (
-              <EmptyState
-                title="Nothing here yet"
-                description="Analyses you run and contracts you compose will appear here for quick reopening, stored only in your browser."
-              />
-            ) : (
-              <ul className="flex flex-col gap-2">
-                {recent.map((entry) => (
-                  <ActivityRow
-                    key={entry.id}
-                    entry={entry}
-                    onOpen={handleOpen}
-                    onDelete={remove}
-                  />
-                ))}
-              </ul>
-            )}
+            <ActivityTable entries={recent} onOpen={handleOpen} onDelete={remove} />
           </div>
         </section>
+
+        <div className="flex flex-col gap-6">
+          <SeverityCard analyses={analyses} />
+          <QuickActions />
+        </div>
       </div>
     </div>
   );

@@ -30,15 +30,35 @@ import { groqErrorMessage, type GroqErrorCode } from '../utils/risks';
 import { buildDraftPages, splitDraftIntoSections } from '../utils/draft';
 import {
   createHistoryId,
-  upsertHistoryEntry,
+  getBoundUserId,
   getHistoryEntry,
+  upsertHistoryEntry,
   type HistoryEntry,
 } from '../services/historyService';
+import { persistAnalysisDocument } from '../services/previewService';
+import { useToast } from './ToastContext';
 
 export interface AnalysisError {
   code: GroqErrorCode;
   message: string;
   retriable: boolean;
+}
+
+/** Cap on stored per-page text so a single analysis stays a few hundred KB at most. */
+const MAX_STORED_PAGE_TEXT_CHARS = 200_000;
+
+function cappedPageTexts(pages: PdfPage[]): PdfPage[] {
+  let budget = MAX_STORED_PAGE_TEXT_CHARS;
+  const out: PdfPage[] = [];
+  for (const page of pages) {
+    if (budget <= 0) {
+      break;
+    }
+    const text = page.text.slice(0, budget);
+    out.push({ pageNumber: page.pageNumber, text });
+    budget -= text.length;
+  }
+  return out;
 }
 
 interface AnalysisContextValue {
@@ -50,6 +70,7 @@ interface AnalysisContextValue {
   isDraft: boolean;
   analysis: ContractAnalysis | null;
   record: HistoryEntry | null;
+  restoringRecord: boolean;
   selectedRisk: ContractRisk | null;
   chatMessages: ChatMessage[];
   progress: AnalysisProgress;
@@ -63,6 +84,7 @@ interface AnalysisContextValue {
   resumeAnalysis: (id: string, givenFile?: File) => Promise<void>;
   discardCheckpoint: (id: string) => void;
   openEntry: (id: string) => Promise<void>;
+  attachPdfToRecord: (file: File) => Promise<void>;
   selectRisk: (risk: ContractRisk | null) => void;
   setCurrentPage: (page: number) => void;
   sendMessage: (text: string) => Promise<void>;
@@ -139,6 +161,7 @@ interface AnalysisProviderProps {
 }
 
 export function AnalysisProvider({ children }: AnalysisProviderProps) {
+  const { toast } = useToast();
   const [file, setFile] = useState<File | null>(null);
   const [displayName, setDisplayName] = useState('');
   const [pages, setPages] = useState<PdfPage[]>([]);
@@ -154,6 +177,8 @@ export function AnalysisProvider({ children }: AnalysisProviderProps) {
   const [isChatBusy, setIsChatBusy] = useState(false);
   const [currentPage, setCurrentPageState] = useState(1);
   const [record, setRecord] = useState<HistoryEntry | null>(null);
+  const [restoringRecord, setRestoringRecord] = useState(false);
+  const [isDraftState, setIsDraftState] = useState(false);
   const totalPages = pages.length;
 
   const runningRef = useRef(false);
@@ -195,6 +220,8 @@ export function AnalysisProvider({ children }: AnalysisProviderProps) {
     setError(null);
     setCurrentPageState(1);
     setIsChatBusy(false);
+    setRestoringRecord(false);
+    setIsDraftState(false);
   }, []);
 
   const selectRisk = useCallback((risk: ContractRisk | null) => {
@@ -302,9 +329,19 @@ export function AnalysisProvider({ children }: AnalysisProviderProps) {
           updatedAt: Date.now(),
           analysis: completedAnalysis,
           pageCount: isDraftRef.current ? undefined : workingPages.length,
+          pageTexts: isDraftRef.current ? undefined : cappedPageTexts(workingPages),
           draftMarkdown: isDraftRef.current ? draftMarkdownRef.current : undefined,
         };
         upsertHistoryEntry(entry);
+        toast(
+          'success',
+          isDraftRef.current
+            ? 'Analysis complete — draft saved to your history.'
+            : 'Analysis complete — review saved to your history.',
+        );
+        if (givenFile && !isDraftRef.current) {
+          void persistAnalysisDocument(givenFile, entry.id);
+        }
       } catch (caught) {
         if (!runningRef.current) {
           return;
@@ -316,7 +353,7 @@ export function AnalysisProvider({ children }: AnalysisProviderProps) {
         runningRef.current = false;
       }
     },
-    [],
+    [toast],
   );
 
   const beginAnalysis = useCallback(
@@ -394,6 +431,7 @@ export function AnalysisProvider({ children }: AnalysisProviderProps) {
       sourceNameRef.current = sessionName.trim() || 'Generated draft';
       isDraftRef.current = true;
       draftMarkdownRef.current = markdown;
+      setIsDraftState(true);
       setPages(draftPages);
       setDraftMarkdown(markdown);
       setDisplayName(sourceNameRef.current);
@@ -415,8 +453,66 @@ export function AnalysisProvider({ children }: AnalysisProviderProps) {
       reset();
       setRecord(entry);
       setAnalysis(entry.analysis);
+      if (entry.pdfPath) {
+        setRestoringRecord(true);
+        setProgress(makeProgress('preparing', 'Restoring saved document…'));
+        try {
+          const mod = await import('../services/supabaseHistoryService');
+          const file = await mod.downloadStoredPdf(entry.pdfPath, entry.name);
+          if (!file) {
+            return;
+          }
+          setFile(file);
+          const extracted = await extractPdfText(file);
+          setPages(extracted);
+          setContractText(await extractContractText(extracted));
+        } catch (caught) {
+          console.debug('[paqt] failed to restore saved PDF:', caught);
+        } finally {
+          setProgress(makeProgress('complete', 'Analysis complete'));
+          setRestoringRecord(false);
+        }
+      } else if (entry.pageTexts && entry.pageTexts.length > 0) {
+        setPages(entry.pageTexts);
+        setContractText(await extractContractText(entry.pageTexts));
+      }
     },
     [beginWithText, reset],
+  );
+
+  const attachPdfToRecord = useCallback(
+    async (file: File) => {
+      const current = record;
+      if (!current || current.kind !== 'analysis' || !current.analysis) {
+        return;
+      }
+      setRestoringRecord(true);
+      setProgress(makeProgress('preparing', 'Attaching document…'));
+      try {
+        setFile(file);
+        setIsDraftState(false);
+        sourceNameRef.current = file.name;
+        const extracted = await extractPdfText(file);
+        setPages(extracted);
+        setContractText(await extractContractText(extracted));
+        setCurrentPageState(1);
+        setProgress(makeProgress('complete', 'Analysis complete'));
+        void persistAnalysisDocument(file, current.id);
+        toast(
+          'success',
+          getBoundUserId()
+            ? 'Document attached — viewer and chat are ready.'
+            : 'Document attached for this session. Sign in to keep it saved to your account.',
+        );
+      } catch (caught) {
+        console.debug('[paqt] attach pdf failed:', caught);
+        toast('error', 'Could not attach this document. The file may be invalid.');
+        setFile(null);
+      } finally {
+        setRestoringRecord(false);
+      }
+    },
+    [record, toast],
   );
 
   const retryAnalysis = useCallback(async () => {
@@ -476,9 +572,10 @@ export function AnalysisProvider({ children }: AnalysisProviderProps) {
       pages,
       contractText,
       draftMarkdown,
-      isDraft: file === null && pages.length > 0,
+      isDraft: isDraftState,
       analysis,
       record,
+      restoringRecord,
       selectedRisk,
       chatMessages,
       progress,
@@ -492,6 +589,7 @@ export function AnalysisProvider({ children }: AnalysisProviderProps) {
       resumeAnalysis,
       discardCheckpoint,
       openEntry,
+      attachPdfToRecord,
       selectRisk,
       setCurrentPage,
       sendMessage,
@@ -503,8 +601,10 @@ export function AnalysisProvider({ children }: AnalysisProviderProps) {
       pages,
       contractText,
       draftMarkdown,
+      isDraftState,
       analysis,
       record,
+      restoringRecord,
       selectedRisk,
       chatMessages,
       progress,
@@ -518,6 +618,7 @@ export function AnalysisProvider({ children }: AnalysisProviderProps) {
       resumeAnalysis,
       discardCheckpoint,
       openEntry,
+      attachPdfToRecord,
       selectRisk,
       setCurrentPage,
       sendMessage,

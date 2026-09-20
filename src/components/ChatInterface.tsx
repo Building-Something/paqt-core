@@ -14,9 +14,10 @@ const SUGGESTED_PROMPTS = [
 
 interface ChatInterfaceProps {
   disabled?: boolean;
+  restoring?: boolean;
 }
 
-export function ChatInterface({ disabled = false }: ChatInterfaceProps) {
+export function ChatInterface({ disabled = false, restoring = false }: ChatInterfaceProps) {
   const { analysis, chatMessages, isChatBusy, sendMessage, selectedRisk } =
     useAnalysis();
   const [draft, setDraft] = useState('');
@@ -53,6 +54,27 @@ export function ChatInterface({ disabled = false }: ChatInterfaceProps) {
     return <EmptyState title="No contract loaded" />;
   }
 
+  if (restoring) {
+    return (
+      <div className="flex h-full min-h-0 flex-col">
+        <div className="border-b border-border bg-background px-5 py-4">
+          <h2 className="text-sm font-semibold text-foreground">
+            Contract assistant
+          </h2>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Ask questions specific to this contract.
+          </p>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto bg-muted/40 px-5 py-8">
+          <EmptyState
+            title="Restoring document…"
+            description="Paqt is loading the saved PDF so you can view it and ask questions from history."
+          />
+        </div>
+      </div>
+    );
+  }
+
   if (disabled) {
     return (
       <div className="flex h-full min-h-0 flex-col">
@@ -67,7 +89,7 @@ export function ChatInterface({ disabled = false }: ChatInterfaceProps) {
         <div className="min-h-0 flex-1 overflow-y-auto bg-muted/40 px-5 py-8">
           <EmptyState
             title="Archived session"
-            description="The original PDF isn’t retained after analysis, so chat isn’t available from history. Re-upload the contract and run a fresh analysis to ask questions."
+            description="This older review has no PDF or page text on file, so chat isn't available from history. Attach the PDF once (or re-analyze) to activate it."
           />
         </div>
       </div>

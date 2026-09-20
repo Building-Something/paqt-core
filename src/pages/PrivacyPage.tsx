@@ -6,11 +6,11 @@ export function PrivacyPage() {
   return (
     <div className="mx-auto max-w-3xl px-4 py-14">
       <Link
-        to="/"
+        to="/dashboard"
         className="inline-flex items-center gap-1.5 text-sm font-medium text-foreground transition-colors hover:text-primary"
       >
         <ArrowRight className="size-4 rotate-180" aria-hidden="true" />
-        Back home
+        Back to dashboard
       </Link>
 
       <h1 className="mt-6 text-4xl font-semibold tracking-tight text-foreground">
