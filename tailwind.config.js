@@ -97,6 +97,15 @@ export default {
           'Arial',
           'sans-serif',
         ],
+        display: [
+          'Space Grotesk',
+          'Manrope',
+          'ui-sans-serif',
+          'system-ui',
+          'Segoe UI',
+          'Roboto',
+          'sans-serif',
+        ],
       },
       borderRadius: {
         lg: 'var(--radius)',

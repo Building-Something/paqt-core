@@ -1,0 +1,556 @@
+/* ============================================================
+ * Landing page scroll-reveal + tech CRM hero scene.
+ * CSS-only (no JS loops, no canvas, no three.js). Animated
+ * properties are limited to transform/opacity/background-position
+ * so everything stays on the GPU. prefers-reduced-motion collapses
+ * all motion to a static state at the bottom.
+ * ============================================================ */
+
+/* ---------- Scroll reveal ---------- */
+.reveal {
+  opacity: 0;
+  transform: translateY(18px);
+  transition:
+    opacity 0.4s cubic-bezier(0.22, 1, 0.36, 1),
+    transform 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: opacity, transform;
+}
+
+.reveal--from-left {
+  transform: translateX(-22px);
+}
+
+.reveal--from-right {
+  transform: translateX(22px);
+}
+
+.reveal--scale {
+  transform: scale(0.94);
+}
+
+.reveal.is-revealed,
+.reveal.is-revealed--left,
+.reveal.is-revealed--right,
+.reveal.is-revealed--scale {
+  transition-duration: 0.32s;
+}
+
+.reveal.is-revealed {
+  opacity: 1;
+  transform: none;
+}
+
+/* ---------- Hero 3D scene (CSS parallax, GPU only) ---------- */
+.hero-scene {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.hero-scene > .hero-orb {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(10px);
+  pointer-events: none;
+}
+
+/* Floating tech orb that drifts on the parallax grid. */
+.hero-orb {
+  width: 42vmin;
+  height: 42vmin;
+  background:
+    radial-gradient(
+      circle at 32% 30%,
+      hsl(var(--primary) / 0.55),
+      hsl(var(--primary) / 0.15) 55%,
+      transparent 72%
+    );
+  animation:
+    hero-orb-drift 5s ease-in-out infinite alternate,
+    hero-orb-flicker 2.6s ease-in-out infinite alternate;
+  will-change: transform, opacity;
+}
+
+.hero-orb--a {
+  top: -14%;
+  left: -8%;
+}
+
+.hero-orb--b {
+  right: -12%;
+  bottom: -18%;
+  width: 50vmin;
+  height: 50vmin;
+  background: radial-gradient(
+    circle at 36% 34%,
+    hsl(var(--secondary) / 0.5),
+    hsl(var(--secondary) / 0.12) 55%,
+    transparent 74%
+  );
+  animation-duration: 11s, 5s;
+}
+
+.hero-orb--c {
+  top: 46%;
+  left: 60%;
+  width: 16vmin;
+  height: 16vmin;
+  opacity: 0.5;
+  background: radial-gradient(
+    circle at 30% 30%,
+    hsl(var(--primary) / 0.8),
+    transparent 70%
+  );
+  animation: hero-orb-flicker 2s ease-in-out infinite alternate;
+}
+
+@keyframes hero-orb-drift {
+  from {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  to {
+    transform: translate3d(5rem, 3.5rem, -2rem) scale(1.12);
+  }
+}
+
+@keyframes hero-orb-flicker {
+  from {
+    opacity: 0.55;
+  }
+  to {
+    opacity: 0.95;
+  }
+}
+
+/* 3D grid floor, receding in perspective, scrolling fast. */
+.hero-grid {
+  position: absolute;
+  inset: -4%;
+  background-image:
+    linear-gradient(hsl(var(--border)) 1px, transparent 1px),
+    linear-gradient(90deg, hsl(var(--border)) 1px, transparent 1px);
+  background-size: 56px 56px;
+  transform: perspective(1000px) rotateX(64deg) scale(1.6);
+  transform-origin: 50% 100%;
+  -webkit-mask-image: radial-gradient(
+    ellipse 60% 60% at 50% 58%,
+    #000 0%,
+    transparent 68%
+  );
+  mask-image: radial-gradient(
+    ellipse 60% 60% at 50% 58%,
+    #000 0%,
+    transparent 68%
+  );
+  opacity: 0.35;
+  animation: hero-grid-scroll 1.5s linear infinite;
+  will-change: transform;
+}
+
+@keyframes hero-grid-scroll {
+  from {
+    background-position: 0 0;
+  }
+  to {
+    background-position: 0 56px;
+  }
+}
+
+/* Slow panning radial tint + vignette to ground the orbs. */
+.hero-tint {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(
+      90% 70% at 20% 30%,
+      hsl(var(--primary) / 0.14),
+      transparent 60%
+    ),
+    radial-gradient(
+      80% 60% at 80% 70%,
+      hsl(var(--secondary) / 0.1),
+      transparent 65%
+    );
+  animation: hero-tint-shift 8s ease-in-out infinite alternate;
+}
+
+@keyframes hero-tint-shift {
+  from {
+    transform: translate3d(-2%, -1%, 0);
+  }
+  to {
+    transform: translate3d(2%, 2%, 0);
+  }
+}
+
+/* ---------- Always-on tech headline treatment ---------- */
+.hero-headline {
+  font-family: var(--font-display, 'Space Grotesk', 'Manrope', ui-sans-serif, system-ui, sans-serif);
+  position: relative;
+  display: inline-block;
+  background-image: linear-gradient(
+    110deg,
+    hsl(var(--foreground)) 8%,
+    hsl(var(--primary)) 22%,
+    hsl(var(--foreground)) 36%,
+    hsl(var(--primary)) 52%,
+    hsl(var(--foreground)) 68%,
+    hsl(var(--foreground)) 100%
+  );
+  background-clip: text;
+  color: transparent;
+  background-size: 260% 100%;
+  filter: drop-shadow(0 0 16px hsl(var(--primary) / 0.3));
+  animation:
+    hero-headline-shimmer 2.6s linear infinite,
+    hero-headline-glow 3.2s ease-in-out infinite;
+  will-change: background-position, filter;
+}
+
+@keyframes hero-headline-shimmer {
+  to {
+    background-position: -260% 0;
+  }
+}
+
+@keyframes hero-headline-glow {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 10px hsl(var(--primary) / 0.16));
+  }
+  50% {
+    filter: drop-shadow(0 0 22px hsl(var(--primary) / 0.4));
+  }
+}
+
+/* ---------- Orbital tech geometry (Lottie-style) ---------- */
+.orbit {
+  position: absolute;
+  border-radius: 9999px;
+  pointer-events: none;
+  will-change: transform;
+}
+
+.orbit--inner {
+  inset: 14% 18% 22% 32%;
+  border: 1px dashed hsl(var(--primary) / 0.5);
+  animation: orbit-spin 14s linear infinite;
+}
+
+.orbit--outer {
+  inset: 4% 8% 10% 18%;
+  border: 1px dashed hsl(var(--secondary) / 0.45);
+  animation: orbit-spin-reverse 22s linear infinite;
+}
+
+.orbit--mid {
+  inset: 9% 12% 16% 24%;
+  border: 1.5px solid hsl(var(--primary) / 0.12);
+  animation: orbit-spin 9s linear infinite;
+}
+
+.orbit-dot {
+  position: absolute;
+  top: -4px;
+  left: 50%;
+  width: 8px;
+  height: 8px;
+  margin-left: -4px;
+  border-radius: 9999px;
+  background: hsl(var(--primary));
+  box-shadow: 0 0 10px hsl(var(--primary) / 0.8);
+}
+
+.orbit-dot--dim {
+  top: auto;
+  bottom: -3px;
+  width: 6px;
+  height: 6px;
+  margin-left: -3px;
+  opacity: 0.6;
+}
+
+@keyframes orbit-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes orbit-spin-reverse {
+  from {
+    transform: rotate(360deg);
+  }
+  to {
+    transform: rotate(0deg);
+  }
+}
+
+/* ---------- Floating glass chips around the CRM preview ---------- */
+.float-chip {
+  will-change: transform;
+  animation: float-chip 4.5s ease-in-out infinite alternate;
+}
+
+.float-chip--d1 {
+  animation-delay: 0s;
+}
+
+.float-chip--d2 {
+  animation-delay: -1.4s;
+}
+
+.float-chip--d3 {
+  animation-delay: -2.8s;
+}
+
+@keyframes float-chip {
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    transform: translate3d(0, -10px, 0);
+  }
+}
+
+/* ---------- CRM preview micro-animations ---------- */
+.crm-scan {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    hsl(var(--primary) / 0.8),
+    transparent
+  );
+  animation: crm-scan-sweep 3.2s ease-in-out infinite;
+}
+
+@keyframes crm-scan-sweep {
+  0% {
+    top: 6%;
+    opacity: 0;
+  }
+  12% {
+    opacity: 1;
+  }
+  88% {
+    opacity: 1;
+  }
+  100% {
+    top: 94%;
+    opacity: 0;
+  }
+}
+
+.chart-bar {
+  transform-origin: bottom;
+  animation: chart-grow 4s cubic-bezier(0.22, 1, 0.36, 1) infinite alternate;
+  will-change: transform;
+}
+
+@keyframes chart-grow {
+  from {
+    transform: scaleY(0.55);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+
+.spark-fill {
+  stroke-dasharray: 260;
+  stroke-dashoffset: 260;
+  animation: spark-draw 3.4s ease-in-out infinite alternate;
+  will-change: stroke-dashoffset;
+}
+
+@keyframes spark-draw {
+  from {
+    stroke-dashoffset: 260;
+  }
+  to {
+    stroke-dashoffset: 60;
+  }
+}
+
+.live-dot {
+  animation: live-ping 1.6s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+@keyframes live-ping {
+  0% {
+    box-shadow: 0 0 0 0 hsl(var(--primary) / 0.5);
+  }
+  75%,
+  100% {
+    box-shadow: 0 0 0 8px transparent;
+  }
+}
+
+/* Ticker for the stats band under the hero. */
+.ticker-fade {
+  animation: ticker-fade 6s ease-in-out infinite alternate;
+}
+
+@keyframes ticker-fade {
+  from {
+    opacity: 0.65;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* ---------- 2D tech boxes (hero background) ---------- */
+.tech-piece {
+  position: absolute;
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+
+/* Soft drift variants so each marker floats on its own path. */
+.tech-piece--a {
+  animation: tech-drift-a 7s ease-in-out infinite alternate, tech-flicker 5s ease-in-out infinite alternate;
+}
+.tech-piece--b {
+  animation: tech-drift-b 8s ease-in-out infinite alternate, tech-flicker 6s ease-in-out infinite alternate;
+}
+.tech-piece--c {
+  animation: tech-drift-c 6s ease-in-out infinite alternate;
+}
+.tech-piece--d {
+  animation: tech-drift-d 9s ease-in-out infinite alternate, tech-flicker 4.5s ease-in-out infinite alternate;
+}
+.tech-piece--e {
+  animation: tech-drift-a 6.5s ease-in-out infinite alternate;
+}
+
+@keyframes tech-drift-a {
+  from { transform: translate3d(0, 0, 0) rotate(-1.5deg); }
+  to { transform: translate3d(1.25rem, -1rem, 0) rotate(2deg); }
+}
+@keyframes tech-drift-b {
+  from { transform: translate3d(0, 0, 0) rotate(1deg); }
+  to { transform: translate3d(-1rem, 1.25rem, 0) rotate(-2deg); }
+}
+@keyframes tech-drift-c {
+  from { transform: translate3d(0, 0, 0); }
+  to { transform: translate3d(0.75rem, 1.5rem, 0) scale(1.04); }
+}
+@keyframes tech-drift-d {
+  from { transform: translate3d(0, 0, 0); }
+  to { transform: translate3d(-1.5rem, -0.75rem, 0); }
+}
+@keyframes tech-flicker {
+  from { opacity: 0.75; }
+  to { opacity: 1; }
+}
+
+/* Crosshair plus-in-circle marker. */
+.tech-crosshair {
+  position: relative;
+  width: 34px;
+  height: 34px;
+}
+.tech-crosshair::before,
+.tech-crosshair::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  translate: -50% -50%;
+  background: hsl(var(--primary) / 0.6);
+}
+.tech-crosshair::before {
+  width: 16px;
+  height: 1.5px;
+}
+.tech-crosshair::after {
+  width: 1.5px;
+  height: 16px;
+}
+.tech-crosshair__ring {
+  position: absolute;
+  inset: 0;
+  border: 1px dashed hsl(var(--primary) / 0.45);
+  border-radius: 9999px;
+}
+
+/* Marquee (document-types strip under the hero). */
+.marquee {
+  position: relative;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent);
+}
+.marquee-track {
+  display: flex;
+  width: max-content;
+  gap: 2.5rem;
+  padding-right: 2.5rem;
+  animation: marquee-scroll 26s linear infinite;
+  will-change: transform;
+}
+@keyframes marquee-scroll {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
+/* Button arrow micro-interaction. */
+.btn-arrow {
+  transition: transform 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.group:hover .btn-arrow {
+  transform: translateX(4px);
+}
+
+/* ---------- Mono tech accent ---------- */
+.tech-mono {
+  font-family: 'Consolas', 'SFMono-Regular', 'Menlo', monospace;
+  letter-spacing: 0.04em;
+}
+
+/* ---------- Reduced motion: static, everything visible ---------- */
+@media (prefers-reduced-motion: reduce) {
+  .reveal {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+
+  .hero-orb,
+  .hero-grid,
+  .hero-tint,
+  .orbit,
+  .orbit--inner,
+  .orbit--outer,
+  .orbit--mid,
+  .float-chip,
+  .crm-scan,
+  .chart-bar,
+  .spark-fill,
+  .live-dot,
+  .ticker-fade,
+  .tech-piece,
+  .marquee-track {
+    animation: none;
+  }
+
+  .btn-arrow {
+    transition: none;
+  }
+
+  .hero-headline {
+    background-image: none;
+    color: hsl(var(--foreground));
+    filter: none;
+    animation: none;
+  }
+}

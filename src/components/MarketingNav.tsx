@@ -11,7 +11,7 @@ export function Logo() {
         alt="Paqt logo"
         className="size-7 object-contain"
       />
-      <span className="text-lg font-semibold tracking-tight text-foreground">Paqt</span>
+      <span className="font-display text-lg font-semibold tracking-tight text-foreground">Paqt</span>
     </Link>
   );
 }
@@ -21,9 +21,20 @@ export function MarketingNav() {
   const signedIn = Boolean(session);
 
   return (
-    <header className="sticky top-0 z-40 border-b border-border bg-background/90 backdrop-blur">
-      <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-3 px-4 sm:px-6">
-        <Logo />
+    <header className="sticky top-3 z-50 -mb-14 pointer-events-none">
+    <div className="pointer-events-auto mx-auto flex w-fit max-w-full items-center justify-center px-3 sm:px-4">
+      <div className="relative flex h-14 w-fit max-w-full items-center justify-center gap-2 overflow-x-auto rounded-2xl border border-border/60 bg-background/40 px-2 shadow-[0_8px_30px_-12px_hsl(var(--primary)/0.4)] backdrop-blur-2xl backdrop-saturate-200 no-scrollbar supports-[backdrop-filter]:bg-background/30 sm:gap-3 sm:px-3">
+        <div
+          className="pointer-events-none absolute inset-x-4 top-0 h-px bg-gradient-to-r from-transparent via-white/70 to-transparent dark:via-primary/50"
+          aria-hidden="true"
+        />
+        <div
+          className="pointer-events-none absolute inset-x-4 bottom-0 h-px bg-gradient-to-r from-transparent via-primary/40 to-transparent"
+          aria-hidden="true"
+        />
+        <div className="min-w-0">
+          <Logo />
+        </div>
         <nav className="hidden items-center gap-1 md:flex" aria-label="Main">
           <a
             href="#features"
@@ -50,7 +61,7 @@ export function MarketingNav() {
             About
           </Link>
         </nav>
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2">
           <ThemeToggle />
           {signedIn ? (
             <Button variant="outline" size="sm" asChild>
@@ -68,7 +79,8 @@ export function MarketingNav() {
           </Button>
         </div>
       </div>
-    </header>
+    </div>
+  </header>
   );
 }
 

@@ -150,16 +150,23 @@ export async function removeRemoteHistory(userId: string, id: string): Promise<v
     .select('preview_path, pdf_path')
     .eq('id', id)
     .maybeSingle();
-  const paths = [(row as Pick<DocumentRow, 'preview_path' | 'pdf_path'> | null)?.preview_path,
-    (row as Pick<DocumentRow, 'preview_path' | 'pdf_path'> | null)?.pdf_path];
-  if (paths.some((path) => path)) {
-    await supabase!.storage
-      .from(PREVIEW_BUCKET)
-      .remove(paths.filter((path): path is string => Boolean(path)));
-  }
-  const { error } = await supabase!.from('documents').delete().eq('id', id);
+  const paths = [
+    (row as Pick<DocumentRow, 'preview_path' | 'pdf_path'> | null)?.preview_path,
+    (row as Pick<DocumentRow, 'preview_path' | 'pdf_path'> | null)?.pdf_path,
+  ].filter((path): path is string => Boolean(path));
+  // Delete the DB row FIRST — a storage hiccup must never stop the record's
+  // removal. Storage objects are cleaned up best-effort afterwards.
+  const { error } = await supabase!.from('documents').delete().eq('id', id).eq('user_id', userId);
   if (error) {
-    console.debug('[paqt] remote history delete failed:', error.message);
+    console.warn('[paqt] remote history delete failed:', error.message);
+    return;
+  }
+  if (paths.length > 0) {
+    try {
+      await supabase!.storage.from(PREVIEW_BUCKET).remove(paths);
+    } catch (storageError) {
+      console.debug('[paqt] storage cleanup after delete failed:', storageError);
+    }
   }
 }
 

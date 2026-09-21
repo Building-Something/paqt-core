@@ -7,7 +7,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import type { Session, User } from '@supabase/supabase-js';
+import type { RealtimeChannel, Session, User } from '@supabase/supabase-js';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import { bindHistoryToUser, unbindHistoryToUser } from '../services/historyService';
 import { clearRemoteHistory } from '../services/supabaseHistoryService';
@@ -33,6 +33,78 @@ interface AuthContextValue {
   signOut: () => Promise<void>;
   changePassword: (oldPassword: string, newPassword: string) => Promise<AccountActionResult>;
   deleteAccount: () => Promise<AccountActionResult>;
+}
+
+const AUTH_SYNC_CHANNEL = 'paqt-auth-sync';
+const AUTH_SYNC_EVENT = 'force_signout';
+
+interface AuthSyncPayload {
+  userId: string;
+  deviceId: string;
+}
+
+function getDeviceId(): string {
+  try {
+    const key = 'paqt.deviceId.v1';
+    const existing = window.localStorage.getItem(key);
+    if (existing) {
+      return existing;
+    }
+    const fresh =
+      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `paqt-device-${Math.random().toString(36).slice(2)}`;
+    window.localStorage.setItem(key, fresh);
+    return fresh;
+  } catch {
+    return `paqt-device-${Math.random().toString(36).slice(2)}`;
+  }
+}
+
+const DEVICE_ID = getDeviceId();
+
+function broadcastForceSignout(userId: string): void {
+  if (!supabase) {
+    return;
+  }
+  void (async () => {
+    const channel = supabase.channel(AUTH_SYNC_CHANNEL);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        let settled = false;
+        const timer = setTimeout(() => {
+          if (!settled) {
+            settled = true;
+            reject(new Error('realtime subscribe timed out'));
+          }
+        }, 10_000);
+        channel.subscribe((status) => {
+          if (status === 'SUBSCRIBED') {
+            if (!settled) {
+              settled = true;
+              clearTimeout(timer);
+              resolve();
+            }
+          } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+            if (!settled) {
+              settled = true;
+              clearTimeout(timer);
+              reject(new Error(status));
+            }
+          }
+        });
+      });
+      await channel.send({
+        type: 'broadcast',
+        event: AUTH_SYNC_EVENT,
+        payload: { userId, deviceId: DEVICE_ID } satisfies AuthSyncPayload,
+      });
+    } catch {
+      console.debug('[paqt] auth-sync broadcast failed');
+    } finally {
+      await supabase.removeChannel(channel);
+    }
+  })();
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -103,6 +175,83 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  useEffect(() => {
+    if (!supabase || !user?.id) {
+      return;
+    }
+    const client = supabase;
+    let channel: RealtimeChannel | null = null;
+    let alive = true;
+
+    channel = client
+      .channel(AUTH_SYNC_CHANNEL)
+      .on('broadcast', { event: AUTH_SYNC_EVENT }, (payload) => {
+        if (!alive) {
+          return;
+        }
+        const incoming = payload?.payload as AuthSyncPayload | undefined;
+        if (!incoming || incoming.userId !== user.id || incoming.deviceId === DEVICE_ID) {
+          return;
+        }
+        void client.auth.signOut({ scope: 'local' });
+        unbindHistoryToUser();
+      })
+      .subscribe();
+
+    return () => {
+      alive = false;
+      if (channel) {
+        void client.removeChannel(channel);
+      }
+    };
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!supabase || !user?.id) {
+      return;
+    }
+    const client = supabase;
+    let alive = true;
+
+    const checkSession = async (): Promise<void> => {
+      if (!alive) {
+        return;
+      }
+      let sessionDead: boolean;
+      try {
+        const { data, error } = await client.rpc('auth_session_alive');
+        if (error) {
+          return;
+        }
+        sessionDead = data === false;
+      } catch {
+        return;
+      }
+      if (!alive || !sessionDead) {
+        return;
+      }
+      await client.auth.signOut({ scope: 'local' });
+      unbindHistoryToUser();
+    };
+
+    void checkSession();
+    const interval = window.setInterval(() => void checkSession(), 30_000);
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        void checkSession();
+      }
+    };
+    window.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('focus', onVisibility);
+
+    return () => {
+      alive = false;
+      window.clearInterval(interval);
+      window.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('focus', onVisibility);
+    };
+  }, [user?.id]);
+
   const signIn = useCallback(async (email: string, password: string): Promise<AuthActionResult> => {
     if (!supabase) {
       return { ok: false, pendingConfirmation: false, error: 'Supabase is not configured.' };
@@ -148,9 +297,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (error) {
         return { ok: false, error: friendlyAuthError(error.message) };
       }
+      broadcastForceSignout(user.id);
+      try {
+        await supabase.auth.signOut({ scope: 'others' });
+      } catch {
+        console.debug('[paqt] revoking other sessions on other devices failed');
+      }
       return { ok: true, error: null };
     },
-    [user?.email],
+    [user?.email, user?.id],
   );
 
   const deleteAccount = useCallback(async (): Promise<AccountActionResult> => {
@@ -174,6 +329,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         console.debug('[paqt] delete_user RPC failed:', error.message);
       }
     }
+
+    broadcastForceSignout(userId);
 
     await supabase.auth.signOut();
     unbindHistoryToUser();

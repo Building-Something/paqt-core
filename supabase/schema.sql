@@ -48,6 +48,90 @@ create index if not exists documents_user_updated_idx
 -- Ensure the Data API role can access the table.
 grant select, insert, update, delete on public.documents to authenticated;
 
+-- ============================================================
+-- Session liveness helpers (sign-out-from-everywhere).
+--
+-- MUST be defined BEFORE the RLS policies below, because the
+-- policies call `public.is_active_user()`.
+--
+-- Supabase access tokens are STATELESS JWTs: after an account is
+-- deleted or its sessions are revoked (password change, global
+-- sign-out) an already-issued access token keeps passing RLS until
+-- its `exp` claim, so other devices stay "logged in" for up to a
+-- token lifetime. The app repairs this in two ways:
+--
+--   1. `is_active_user()` - a database-level guard added to every
+--      documents policy. Requests carrying a token whose subject no
+--      longer exists in auth.users are rejected server-side, closing
+--      the window for deleted accounts.
+--
+--   2. `auth_session_alive()` - an RPC the client polls (every ~30s
+--      and on tab focus). It compares the token's session_id claim
+--      against auth.sessions: if the user row or the session row is
+--      gone (delete account / password change / global sign-out from
+--      another device), it returns false and the app signs the local
+--      session out immediately.
+-- ============================================================
+create or replace function public.is_active_user()
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (select 1 from auth.users where id = auth.uid());
+$$;
+
+revoke all on function public.is_active_user() from public, anon, authenticated;
+grant execute on function public.is_active_user() to authenticated;
+
+create or replace function public.auth_session_alive()
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  claims jsonb;
+  raw_sid text;
+  sid uuid;
+begin
+  begin
+    claims := coalesce(
+      nullif(current_setting('request.jwt.claims', true), '')::jsonb,
+      '{}'::jsonb
+    );
+  exception when others then
+    claims := '{}'::jsonb;
+  end;
+
+  raw_sid := coalesce(claims->>'session_id', claims->>'sid', '');
+  if raw_sid <> '' then
+    begin
+      sid := raw_sid::uuid;
+    exception when others then
+      sid := null;
+    end;
+  end if;
+
+  if not exists (select 1 from auth.users where id = auth.uid()) then
+    return false;
+  end if;
+
+  if sid is not null then
+    return exists (
+      select 1 from auth.sessions s
+      where s.user_id = auth.uid() and s.id = sid
+    );
+  end if;
+
+  return true;
+end;
+$$;
+
+revoke all on function public.auth_session_alive() from public, anon, authenticated;
+grant execute on function public.auth_session_alive() to authenticated;
+
 -- ---- Row Level Security ----
 -- Rules are NOT configurable; they live here so every client
 -- request is scoped to the caller's own user id.
@@ -57,26 +141,26 @@ drop policy if exists "documents_select_own" on public.documents;
 create policy "documents_select_own"
   on public.documents for select
   to authenticated
-  using ((select auth.uid()) = user_id);
+  using ((select auth.uid()) = user_id and public.is_active_user());
 
 drop policy if exists "documents_insert_own" on public.documents;
 create policy "documents_insert_own"
   on public.documents for insert
   to authenticated
-  with check ((select auth.uid()) = user_id);
+  with check ((select auth.uid()) = user_id and public.is_active_user());
 
 drop policy if exists "documents_update_own" on public.documents;
 create policy "documents_update_own"
   on public.documents for update
   to authenticated
-  using ((select auth.uid()) = user_id)
-  with check ((select auth.uid()) = user_id);
+  using ((select auth.uid()) = user_id and public.is_active_user())
+  with check ((select auth.uid()) = user_id and public.is_active_user());
 
 drop policy if exists "documents_delete_own" on public.documents;
 create policy "documents_delete_own"
   on public.documents for delete
   to authenticated
-  using ((select auth.uid()) = user_id);
+  using ((select auth.uid()) = user_id and public.is_active_user());
 
 -- ============================================================
 -- Permanent account deletion (browser-safe).
