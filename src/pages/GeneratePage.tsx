@@ -333,7 +333,7 @@ const persistDraft = useCallback(
       <div
       className={
         phase === 'draft'
-          ? 'mt-4 grid h-[calc(100vh-6rem)] gap-6 lg:h-[calc(100dvh-1rem)] lg:grid-cols-[minmax(0,1fr)_minmax(0,400px)]'
+          ? 'mt-4 grid h-[calc(100dvh-6rem)] gap-6 lg:h-[calc(100dvh-1rem)] lg:grid-cols-[minmax(0,1fr)_minmax(0,400px)]'
           : 'mt-8 grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,440px)] lg:items-start'
       }
     >

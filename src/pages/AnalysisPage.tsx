@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { FileText, GitCompareArrows } from 'lucide-react';
 import { Link, Navigate, useSearchParams } from 'react-router-dom';
 import { useAnalysis } from '../contexts/AnalysisContext';
@@ -13,6 +13,7 @@ import { ChatInterface } from '../components/ChatInterface';
 import { ExportButton } from '../components/ExportButton';
 import { ErrorState } from '../components/ErrorState';
 import { Button } from '../components/ui/button';
+import { Spinner } from '../components/ui/feedback';
 
 type MobileTab = 'summary' | 'document' | 'assistant';
 
@@ -21,6 +22,7 @@ export function AnalysisPage() {
     file,
     fileName,
     pages,
+    contractText,
     draftMarkdown,
     isDraft,
     analysis,
@@ -36,12 +38,15 @@ export function AnalysisPage() {
   const [mobileTab, setMobileTab] = useState<MobileTab>('summary');
   const [searchParams] = useSearchParams();
   const openedIdRef = useRef<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const { openEntry, record } = useAnalysis();
+  const { openEntry, record, restoringRecord, attachPdfToRecord } = useAnalysis();
 
   const pagesText = useMemo(() => pages.map((page) => page.text), [pages]);
   const totalPages = pages.length;
   const isRecord = record !== null && !file && !isDraft;
+  const canChat = Boolean(!isRecord || contractText.trim().length > 0);
+  const archivedReadOnly = isRecord && !canChat;
   const title = record?.name ?? fileName;
 
   const requestedId = searchParams.get('id');
@@ -74,7 +79,7 @@ export function AnalysisPage() {
 
   const handleSelectRisk = (risk: ContractRisk) => {
     selectRisk(risk);
-    if (!isRecord) {
+    if (!archivedReadOnly) {
       setCurrentPage(risk.pageNumber);
       setMobileTab('document');
     }
@@ -82,7 +87,15 @@ export function AnalysisPage() {
 
   const unitLabel = isDraft ? 'section' : 'page';
 
-  const headerMeta = isRecord
+  function handlePickAttachment(event: ChangeEvent<HTMLInputElement>) {
+    const chosen = event.target.files?.[0];
+    event.target.value = '';
+    if (chosen) {
+      void attachPdfToRecord(chosen);
+    }
+  }
+
+  const headerMeta = record
     ? 'Archived analysis'
     : progress.stage === 'complete' && analysis
       ? `${totalPages} ${unitLabel}${totalPages === 1 ? '' : 's'} · analysis complete`
@@ -94,15 +107,26 @@ export function AnalysisPage() {
         <FileText className="size-6" aria-hidden="true" />
       </div>
       <p className="text-sm font-medium text-foreground">
-        Original PDF not retained
+        Original PDF not available
       </p>
       <p className="max-w-sm text-sm leading-relaxed text-muted-foreground">
-        Paqt doesn’t store your uploaded document after analysis. Re-upload the
-        PDF to review it page by page or ask follow-up questions.
+        This review was created before PDF retention, or its document was too
+        large to keep, so it opens as read-only findings. Attach the same
+        contract to restore the page-by-page viewer and chat.
       </p>
-      <Button variant="outline" asChild>
-        <Link to="/analyze">Re-analyze a contract</Link>
-      </Button>
+      <div className="flex flex-wrap items-center justify-center gap-2">
+        <Button onClick={() => fileInputRef.current?.click()} disabled={restoringRecord}>
+          {restoringRecord ? (
+            <Spinner className="size-4" aria-hidden="true" />
+          ) : (
+            <FileText className="size-4" aria-hidden="true" />
+          )}
+          {restoringRecord ? 'Attaching…' : 'Attach this PDF'}
+        </Button>
+        <Button variant="outline" asChild>
+          <Link to="/analyze">Re-analyze a contract</Link>
+        </Button>
+      </div>
     </div>
   ) : file ? (
     <PdfViewer
@@ -136,6 +160,13 @@ export function AnalysisPage() {
 
   return (
     <div className="flex flex-col lg:h-[100dvh]">
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="application/pdf,.pdf"
+        className="hidden"
+        onChange={handlePickAttachment}
+      />
       {/* Studio header */}
       <div className="flex flex-wrap items-center gap-3 border-b border-border bg-background px-4 py-3 sm:px-6">
         <div className="flex min-w-0 items-center gap-2.5">
@@ -153,7 +184,7 @@ export function AnalysisPage() {
       </div>
 
       {/* Mobile tabs */}
-      {!isRecord ? (
+      {!archivedReadOnly ? (
         <div
           className="flex border-b border-border bg-background lg:hidden"
           role="tablist"
@@ -256,18 +287,32 @@ export function AnalysisPage() {
             </section>
 
             <aside className="min-h-0 overflow-hidden border-l border-border bg-background">
-              <ChatInterface disabled={isRecord} />
+              <ChatInterface disabled={archivedReadOnly} restoring={restoringRecord} />
             </aside>
           </div>
 
           {/* Mobile stacked layout */}
-          {isRecord ? (
-            <div className="space-y-6 bg-muted/40 px-4 py-5 lg:hidden">
+          {archivedReadOnly ? (
+            <div className="space-y-4 bg-muted/40 px-4 py-5 lg:hidden">
               <div className="rounded-lg border border-border bg-card px-4 py-3 text-sm text-muted-foreground">
-                This is an archived review. The original PDF isn’t stored after
-                analysis — re-upload to view it page by page or ask questions.
+                This is an older archived review without a retained PDF. Attach
+                the same contract to restore the viewer and chat from history.
               </div>
-              <ContractSummary analysis={analysis} />
+              <Button
+                className="w-full"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={restoringRecord}
+              >
+                {restoringRecord ? (
+                  <Spinner className="size-4" aria-hidden="true" />
+                ) : (
+                  <FileText className="size-4" aria-hidden="true" />
+                )}
+                {restoringRecord ? 'Attaching…' : 'Attach this PDF'}
+              </Button>
+              <div className="pt-1">
+                <ContractSummary analysis={analysis} />
+              </div>
               <RiskBreakdown risks={analysis.risks} />
               <RiskList
                 risks={analysis.risks}
@@ -296,7 +341,7 @@ export function AnalysisPage() {
 
               {mobileTab === 'assistant' ? (
                 <div className="h-[calc(100dvh-9rem)] bg-background">
-                  <ChatInterface disabled={isRecord} />
+                  <ChatInterface disabled={archivedReadOnly} restoring={restoringRecord} />
                 </div>
               ) : null}
 

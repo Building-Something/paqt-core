@@ -8,8 +8,8 @@ Paqt is an AI-assisted contract review workspace. It identifies potentially impo
 
 The app is organized as a contract workspace with a sidebar shell:
 
-- **Dashboard** (`/`) — stats, quick actions, and recent activity across analyses and drafts. History lives in `localStorage` (`paqt.history.v1`) and is never sent to the server.
-- **Analyze** (`/analyze`) — upload a PDF for a risk review, or reopen past reviews from browser history.
+- **Dashboard** (`/dashboard`) — stats, quick actions, and recent activity across analyses and drafts. History syncs to your Supabase account and is cached per-user in `localStorage` (`paqt.history.v1.<user-id>`).
+- **Analyze** (`/analyze`) — upload a PDF for a risk review, or reopen past reviews from your account history.
 - **Workspace** (`/analysis?id=<history-id>`) — the full-width three-zone review: decision brief + risk list, document viewer (PDF or generated-draft sections), and the contract assistant. File analyses reopen as a read-only archive; generated-draft analyses re-run the review from the stored markdown.
 - **Compose** (`/generate`) — a horizontal split view: the composer on the right (brief → clarifying questions → revise), and a Google-Docs-style rich text editor on the left where the drafted agreement is directly editable and automatically saved. One click exports a professionally formatted legal PDF. Drafts persist to browser history and reopen with `/generate?draft=<history-id>`.
 
@@ -19,7 +19,7 @@ Requirements: Node 20+, npm.
 
 ```bash
 npm ci
-cp .env.example .env     # then set GROQ_API_KEY
+cp .env.example .env     # then set GROQ_API_KEY + Supabase keys (below)
 npm run dev
 ```
 
@@ -88,6 +88,35 @@ instructions/         product/architecture specs the implementation was built ag
 
 All AI configuration (model, key, timeout, reasoning prompts) lives on the server. The browser bundle never contains `GROQ_API_KEY`.
 
+## Accounts, auth, and cloud history
+
+Paqt uses **Supabase** for authentication and account storage. Sign-up/sign-in are email + password. The marketing pages (`/`, `/features`, `/about`, `/privacy`) are public; the workspace routes (`/dashboard`, `/analyze`, `/generate`, `/analysis`) require a signed-in session and redirect to `/signin` otherwise. `src/contexts/AuthContext.tsx` owns the session, and `src/components/RequireAuth.tsx` guards the routes.
+
+> **Note on Vite env vars:** Vite only exposes variables prefixed with `VITE_` to the browser, so the (public) Supabase publishable key lives in `.env` as `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` — not `NEXT_PUBLIC_*`. This is a Vite SPA, so only `@supabase/supabase-js` is used; `@supabase/ssr` (cookie/auth helpers for server-rendered frameworks like Next.js) is not needed here.
+
+### Supabase setup (one-time)
+
+1. Create a project and copy the publishable key from **Project Settings → API**.
+2. Paste this into `.env`:
+   ```
+   VITE_SUPABASE_URL=https://<project-ref>.supabase.co
+   VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
+   ```
+3. Open the Dashboard **SQL editor**, paste the contents of `supabase/schema.sql`, and run it. That file creates the `documents` table with per-user RLS (users only ever read/write their own rows) and extracted-page-text retention. Then run `supabase/storage.sql` to create the private `documents` bucket and its owner-scoped policies for previews/PDFs. (If `storage.sql` reports `permission denied for schema storage`, your editor role can't touch the managed `storage` schema — create the bucket named `documents` (private) via the Dashboard **Storage** UI instead, then skip that file; everything except PDF retention/thumbnails still works.)
+4. Restart `npm run dev` (`.env` is read at boot).
+
+### How history is stored (the storage-efficient model)
+
+To keep the free tier healthy across a 300–500 user base, Paqt stores a compact **row + preview + PDF** combination — never the full contract text in the DB:
+
+- **Rows, not files.** Each analysis/draft is one row in `documents` holding metadata + the finished analysis/draft JSON (a few KB), plus the **extracted per-page text** (`page_texts`, capped at ~200K chars) so the assistant always works from history, even when a PDF has been trimmed or predates retention.
+- **Retained PDFs.** For every fresh PDF review, the **original document is uploaded** to the private `documents` bucket (`{userId}/{docId}/document.pdf`) so archived reviews keep their page-by-page viewer, PDF download, and chat. Files *over* `MAX_PDF_STORE_BYTES` (25 MB) are not uploaded — the row keeps its findings, texts, and thumbnail and opens read-only for the viewer. The PDF is stored byte-for-byte: a lossy client-side re-encode would destroy the text layer the assistant needs.
+- **Compressed previews.** Page 1 is also rendered to a small JPEG (~30–90 KB, `{userId}/{docId}/preview.jpg`) for list thumbnails, so lists never download the full PDF.
+- **Client cache.** The browser keeps a scoped `localStorage` mirror for offline/fast reads. Guest (signed-out) entries are migrated into your account on the first sign-in, then cleared.
+- **Budgets (trimmed automatically, oldest first):** ≤ 40 history rows per user, ≤ 15 previews per user, ≤ 10 stored PDFs per user. Trimming only removes the blobs; the rows (with findings) and history stay intact.
+
+Signed-out users can still run the whole workspace, but nothing persists to the cloud until they sign in.
+
 ## AI rate limiting
 
 The Groq free plan publishes tight limits for `openai/gpt-oss-120b`: 30 requests/min, 1,000 requests/day, and **8K tokens/min (TPM)**. Paqt applies defense-in-depth so those limits surface as slow-but-working, not hard failures:
@@ -112,12 +141,12 @@ If the free tier is too slow for production use, upgrade to the Groq Developer p
 
 ## Client-side history
 
-`src/services/historyService.ts` stores up to 40 entries under `paqt.history.v1`:
+`src/services/historyService.ts` stores up to 40 entries in a user-scoped `localStorage` key (`paqt.history.v1`, or `paqt.history.v1.<user-id>` when signed in):
 
-- `kind: 'analysis'` — the full `ContractAnalysis` payload (summary, score, risks, recommendations) plus `pageCount`; generated-draft analyses also store the draft markdown.
+- `kind: 'analysis'` — the full `ContractAnalysis` payload (summary, score, risks, recommendations) plus `pageCount`; generated-draft analyses also store the draft markdown; PDF reviews carry `previewPath` (thumbnail) and, when within size budget, `pdfPath` (the retained original document). Opening such a review re-downloads and re-extracts the PDF, restoring the viewer and chat.
 - `kind: 'draft'` — brief, markdown, editor JSON (`draftDoc`, optional for older entries), and section count for composition.
 
-Entries are written on analysis completion and draft generation, and are re-opened via query params (`?id=`, `?draft=`). No contract text or documents are persisted server-side. A tiny pub/sub (`subscribeHistory`) keeps dashboard/analyze lists live; `useHistory` wraps it in a hook.
+Entries are written on analysis completion and draft generation, and are re-opened via query params (`?id=`, `?draft=`). When a user is signed in, every local mutation is mirrored to Supabase (`src/services/supabaseHistoryService.ts`), and on sign-in the account's rows are fetched and merged back — so history follows the user across devices. A tiny pub/sub (`subscribeHistory`) keeps dashboard/analyze lists live; `useHistory` wraps it in a hook.
 
 ## Verified routes (production server)
 
@@ -187,7 +216,7 @@ docker compose up --build -d
 
 ## Privacy model
 
-PDF extraction happens in the browser. Extracted contract text is sent to Groq through Paqt’s server proxy for analysis. The MVP has no database and does not promise permanent storage.
+PDF extraction happens in the browser. Extracted contract text is sent to Groq through Paqt’s server proxy for analysis. Paqt stores finished review/draft summaries, one small page preview, and the original PDF (within size/quota budgets) in your private Supabase account — the full text layer never sits in the database, and chat conversations are never stored.
 
 ## Legal disclaimer
 

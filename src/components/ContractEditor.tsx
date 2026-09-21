@@ -38,7 +38,7 @@ export function ContractEditor({ doc, contentKey = 0, editable = true, onChange 
       return;
     }
     seenKey.current = contentKey;
-    editor.commands.setContent(doc as unknown as JSONContent, false);
+    editor.commands.setContent(doc as unknown as JSONContent, { emitUpdate: false });
     onChange(editor.getJSON() as unknown as ContractDocNode);
   }, [contentKey, doc, editable, editor, onChange]);
 
