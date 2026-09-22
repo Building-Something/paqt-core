@@ -72,6 +72,7 @@ const NAV_SECTIONS = [
     label: 'Resources',
     links: [
       { to: '/', label: 'Site home', icon: Home, end: true },
+      { to: '/pricing', label: 'Pricing', icon: LayoutDashboard, end: false },
       { to: '/settings', label: 'Settings', icon: Settings2, end: false },
     ],
   },

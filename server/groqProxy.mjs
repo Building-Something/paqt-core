@@ -1,5 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import {
+  isBillingConfigured,
+  verifyUser,
+  isPlanActive,
+  consume,
+  refund,
+  MeterError,
+} from './entitlements.mjs';
 
 const GROQ_ENDPOINT = 'https://api.groq.com/openai/v1/chat/completions';
 const GROQ_MODEL = 'openai/gpt-oss-120b';
@@ -254,6 +262,59 @@ export async function groqProxyHandler(req, res) {
     return;
   }
 
+  // ---- Auth + entitlement gate -------------------------------------------------
+  // Only active here when the server has Supabase credentials. Local dev with an
+  // unconfigured Supabase keeps the old open behaviour.
+  let userId = null;
+  let consumedOp = null;
+
+  if (isBillingConfigured()) {
+    const auth = await verifyUser(req.headers.authorization);
+    if (!auth) {
+      sendError(res, createError(401, 'unauthorized', 'Sign in to use Paqt.'));
+      return;
+    }
+    userId = auth.userId;
+
+    const requestedOp = req.headers['x-paqt-op'];
+    const VALID_OPS = ['analysis', 'draft', 'chat', 'clause'];
+    const op = typeof requestedOp === 'string' && VALID_OPS.includes(requestedOp) ? requestedOp : 'chat';
+    // The first request of a multi-step run carries "1" and is the one that is
+    // metered. Later requests of the same run (extra pages, more context) are
+    // plan-checked only so one analysis/draft can never be double-charged.
+    const metered = String(req.headers['x-paqt-metered'] ?? '1') === '1';
+
+    try {
+      if (op === 'analysis' || op === 'draft') {
+        if (metered) {
+          await consume(userId, op);
+          consumedOp = op;
+        } else {
+          const active = await isPlanActive(userId);
+          if (!active) {
+            throw new MeterError({
+              status: 402,
+              code: 'plan_required',
+              message: 'This feature requires an active Paqt subscription.',
+            });
+          }
+        }
+      } else {
+        const active = await isPlanActive(userId);
+        if (!active) {
+          throw new MeterError({
+            status: 402,
+            code: 'plan_required',
+            message: 'This feature requires an active Paqt subscription.',
+          });
+        }
+      }
+    } catch (error) {
+      sendError(res, error);
+      return;
+    }
+  }
+
   // Clamp to the model's supported set; fall back to the default for anything unknown.
   const requestedEffort = body.reasoning_effort;
   const reasoningEffort =
@@ -290,6 +351,10 @@ export async function groqProxyHandler(req, res) {
     });
   } catch (error) {
     clearTimeout(timer);
+    if (consumedOp) {
+      await refund(userId, consumedOp);
+      consumedOp = null;
+    }
     if (error.name === 'AbortError') {
       sendError(res, createError(504, 'timeout', 'The AI analysis took too long.'));
     } else {
@@ -306,6 +371,10 @@ export async function groqProxyHandler(req, res) {
   try {
     upstreamText = await upstream.text();
   } catch {
+    if (consumedOp) {
+      await refund(userId, consumedOp);
+      consumedOp = null;
+    }
     sendError(res, createError(502, 'upstream', 'Could not read the AI response.'));
     return;
   }
@@ -313,6 +382,10 @@ export async function groqProxyHandler(req, res) {
   copyUpstreamRateLimitHeaders(upstream, res);
 
   if (!upstream.ok) {
+    if (consumedOp) {
+      await refund(userId, consumedOp);
+      consumedOp = null;
+    }
     let parsed = null;
     try {
       parsed = JSON.parse(upstreamText);

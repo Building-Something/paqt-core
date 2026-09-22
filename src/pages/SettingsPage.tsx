@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { useAnalysis } from '../contexts/AnalysisContext';
+import { PlanUsageCard } from '../components/PlanUsage';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
@@ -70,7 +71,11 @@ export function SettingsPage() {
         reviews are saved to your Supabase account — nothing is stored only on this device.
       </p>
 
-      <section className="mt-8 rounded-xl border border-border bg-card">
+      <div className="mt-8">
+        <PlanUsageCard />
+      </div>
+
+      <section className="mt-6 rounded-xl border border-border bg-card">
         <div className="border-b border-border px-5 py-4">
           <h2 className="flex items-center gap-2 text-sm font-semibold text-foreground">
             <KeyRound className="size-4 text-primary" aria-hidden="true" />

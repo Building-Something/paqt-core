@@ -26,7 +26,7 @@ import {
 import { extractContractText, extractPdfText } from '../services/pdfService';
 import { analyzePages, chatWithContract, setGroqWaitListener } from '../services/groqService';
 import { GroqServiceError } from '../services/errors';
-import { groqErrorMessage, type GroqErrorCode } from '../utils/risks';
+import { groqErrorMessage, isBillingErrorCode, type GroqErrorCode } from '../utils/risks';
 import { buildDraftPages, splitDraftIntoSections } from '../utils/draft';
 import {
   createHistoryId,
@@ -37,6 +37,8 @@ import {
 } from '../services/historyService';
 import { persistAnalysisDocument } from '../services/previewService';
 import { useToast } from './ToastContext';
+import { useEntitlement } from './EntitlementContext';
+import { useUpgrade } from '../components/UpgradeDialog';
 
 export interface AnalysisError {
   code: GroqErrorCode;
@@ -125,6 +127,12 @@ const KNOWN_CODES: GroqErrorCode[] = [
   'invalid_json',
   'network',
   'unknown',
+  'unauthorized',
+  'plan_required',
+  'plan_expired',
+  'quota_exhausted',
+  'credits_exhausted',
+  'meter_unavailable',
 ];
 
 function toErrorMessage(error: unknown): AnalysisError {
@@ -133,10 +141,12 @@ function toErrorMessage(error: unknown): AnalysisError {
       ? (error.code as GroqErrorCode)
       : 'unknown';
     console.error(`[paqt] groq error ${error.code} (${error.status}):`, error.message);
+    const passingThrough =
+      code === 'rate_limited_daily' || isBillingErrorCode(error.code);
     return {
       code,
       message:
-        code === 'rate_limited_daily' && error.message
+        passingThrough && error.message
           ? error.message
           : groqErrorMessage(code),
       retriable: RETRIABLE_CODES.includes(code),
@@ -162,6 +172,8 @@ interface AnalysisProviderProps {
 
 export function AnalysisProvider({ children }: AnalysisProviderProps) {
   const { toast } = useToast();
+  const { refresh: refreshUsage } = useEntitlement();
+  const { promptUpgrade } = useUpgrade();
   const [file, setFile] = useState<File | null>(null);
   const [displayName, setDisplayName] = useState('');
   const [pages, setPages] = useState<PdfPage[]>([]);
@@ -339,6 +351,7 @@ export function AnalysisProvider({ children }: AnalysisProviderProps) {
             ? 'Analysis complete — draft saved to your history.'
             : 'Analysis complete — review saved to your history.',
         );
+        void refreshUsage();
         if (givenFile && !isDraftRef.current) {
           void persistAnalysisDocument(givenFile, entry.id);
         }
@@ -353,7 +366,7 @@ export function AnalysisProvider({ children }: AnalysisProviderProps) {
         runningRef.current = false;
       }
     },
-    [toast],
+    [toast, refreshUsage],
   );
 
   const beginAnalysis = useCallback(
@@ -547,6 +560,9 @@ export function AnalysisProvider({ children }: AnalysisProviderProps) {
         setChatMessages((messages) => [...messages, aiMessage]);
       } catch (caught) {
         const mapped = toErrorMessage(caught);
+        if (isBillingErrorCode(mapped.code)) {
+          promptUpgrade('plan');
+        }
         const aiMessage: ChatMessage = {
           id: createId('msg'),
           text: mapped.message,
@@ -558,7 +574,7 @@ export function AnalysisProvider({ children }: AnalysisProviderProps) {
         setIsChatBusy(false);
       }
     },
-    [analysis, contractText, isChatBusy, pages],
+    [analysis, contractText, isChatBusy, pages, promptUpgrade],
   );
 
   const setCurrentPage = useCallback((page: number) => {

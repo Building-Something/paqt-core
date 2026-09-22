@@ -16,6 +16,8 @@ import { splitDraftIntoSections } from '../utils/draft';
 import { exportContractPdf } from '../services/pdfExportService';
 import { groqErrorMessage } from '../utils/risks';
 import { useAnalysis } from '../contexts/AnalysisContext';
+import { useFeatureGate } from '../components/PlanUsage';
+import { useEntitlement } from '../contexts/EntitlementContext';
 import { SignaturePanel } from '../components/SignaturePanel';
 import {
   type ContractDocNode,
@@ -95,6 +97,8 @@ export function GeneratePage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { beginWithText } = useAnalysis();
+  const canStartDraft = useFeatureGate();
+  const { refresh: refreshUsage } = useEntitlement();
 
   const [phase, setPhase] = useState<Phase>('brief');
   const [brief, setBrief] = useState('');
@@ -196,6 +200,9 @@ const persistDraft = useCallback(
   }
 
   async function runCreate(suppliedAnswers: Record<number, string>) {
+    if (!canStartDraft('draft')) {
+      return;
+    }
     setWorking(true);
     setBusyMessage('Drafting your agreement…');
     setError(null);
@@ -207,6 +214,7 @@ const persistDraft = useCallback(
       applyDraft(text);
       setPhase('draft');
       window.scrollTo({ top: 0, behavior: 'smooth' });
+      void refreshUsage();
     } catch (caught) {
       setError(errorMessage(caught));
     } finally {
@@ -217,6 +225,9 @@ const persistDraft = useCallback(
   async function handleStart() {
     const trimmed = brief.trim();
     if (!trimmed || working) {
+      return;
+    }
+    if (!canStartDraft('draft')) {
       return;
     }
     setWorking(true);
@@ -260,6 +271,9 @@ const persistDraft = useCallback(
 
   async function handleAnalyze() {
     if (!markdown.trim() || working) {
+      return;
+    }
+    if (!canStartDraft('analysis')) {
       return;
     }
     navigate('/analysis');

@@ -1,4 +1,10 @@
-import { groqJsonRequest, groqTextRequest, getReasoningEffort } from './groqService';
+import {
+  groqJsonRequest,
+  groqTextRequest,
+  getReasoningEffort,
+  pushGroqOp,
+  popGroqOp,
+} from './groqService';
 import { DRAFT_DISCLAIMER_LINE } from '../utils/contractDocument';
 
 const DRAFT_MAX_TOKENS = 16_384;
@@ -70,31 +76,41 @@ function stripDraftBoilerplate(text: string): string {
 }
 
 export async function askDraftingQuestions(brief: string): Promise<string[]> {
-  const raw = await groqJsonRequest(
-    QUESTIONS_SYSTEM_PROMPT,
-    `${QUESTIONS_SCHEMA}\n\nAssignment brief:\n${brief}`,
-    2048,
-    { reasonEffort: getReasoningEffort() },
-  );
+  pushGroqOp('chat');
+  try {
+    const raw = await groqJsonRequest(
+      QUESTIONS_SYSTEM_PROMPT,
+      `${QUESTIONS_SCHEMA}\n\nAssignment brief:\n${brief}`,
+      2048,
+      { reasonEffort: getReasoningEffort() },
+    );
 
-  const parsed = raw as { questions?: unknown };
-  if (typeof raw !== 'object' || raw === null || !Array.isArray(parsed.questions)) {
-    return [];
+    const parsed = raw as { questions?: unknown };
+    if (typeof raw !== 'object' || raw === null || !Array.isArray(parsed.questions)) {
+      return [];
+    }
+    const questions = parsed.questions as unknown[];
+    return questions
+      .filter((question) => typeof question === 'string' && question.trim().length > 0)
+      .map((question) => (question as string).trim())
+      .slice(0, MAX_QUESTIONS);
+  } finally {
+    popGroqOp();
   }
-  const questions = parsed.questions as unknown[];
-  return questions
-    .filter((question) => typeof question === 'string' && question.trim().length > 0)
-    .map((question) => (question as string).trim())
-    .slice(0, MAX_QUESTIONS);
 }
 
 export async function generateContractDraft(brief: string, answers: DraftAnswers): Promise<string> {
-  const userPrompt = `Assignment brief:\n${brief}\n\nAdditional details:\n${formatAnswers(answers)}`;
-  return stripDraftBoilerplate(
-    await groqTextRequest(DRAFT_SYSTEM_PROMPT, userPrompt, DRAFT_MAX_TOKENS, 0.4, {
-      reasonEffort: getReasoningEffort(),
-    }),
-  );
+  pushGroqOp('draft');
+  try {
+    const userPrompt = `Assignment brief:\n${brief}\n\nAdditional details:\n${formatAnswers(answers)}`;
+    return stripDraftBoilerplate(
+      await groqTextRequest(DRAFT_SYSTEM_PROMPT, userPrompt, DRAFT_MAX_TOKENS, 0.4, {
+        reasonEffort: getReasoningEffort(),
+      }),
+    );
+  } finally {
+    popGroqOp();
+  }
 }
 
 export async function reviseContractDraft(
@@ -103,17 +119,22 @@ export async function reviseContractDraft(
   currentDraft: string,
   instruction: string,
 ): Promise<string> {
-  const userPrompt = [
-    `Original assignment brief:\n${brief}`,
-    `Additional details:\n${formatAnswers(answers)}`,
-    `Current draft:\n${currentDraft}`,
-    `Revision instruction:\n${instruction}`,
-  ].join('\n\n');
-  return stripDraftBoilerplate(
-    await groqTextRequest(REVISE_SYSTEM_PROMPT, userPrompt, DRAFT_MAX_TOKENS, 0.4, {
-      reasonEffort: getReasoningEffort(),
-    }),
-  );
+  pushGroqOp('chat');
+  try {
+    const userPrompt = [
+      `Original assignment brief:\n${brief}`,
+      `Additional details:\n${formatAnswers(answers)}`,
+      `Current draft:\n${currentDraft}`,
+      `Revision instruction:\n${instruction}`,
+    ].join('\n\n');
+    return stripDraftBoilerplate(
+      await groqTextRequest(REVISE_SYSTEM_PROMPT, userPrompt, DRAFT_MAX_TOKENS, 0.4, {
+        reasonEffort: getReasoningEffort(),
+      }),
+    );
+  } finally {
+    popGroqOp();
+  }
 }
 
 export type ClauseEditAction = 'rewrite' | 'simplify' | 'strengthen' | 'shorten';
@@ -156,16 +177,21 @@ export async function rewriteSelectedClause(
     '',
     'Return ONLY the replacement text for the selected clause.',
   ].join('\n');
-  const text = await groqTextRequest(
-    CLAUSE_EDIT_SYSTEM_PROMPT,
-    userPrompt,
-    CLAUSE_EDIT_MAX_TOKENS,
-    0.4,
-    { reasonEffort: getReasoningEffort() },
-  );
-  const cleaned = stripDraftBoilerplate(text).trim();
-  if (!cleaned) {
-    throw new Error('empty-rewrite');
+  pushGroqOp('clause');
+  try {
+    const text = await groqTextRequest(
+      CLAUSE_EDIT_SYSTEM_PROMPT,
+      userPrompt,
+      CLAUSE_EDIT_MAX_TOKENS,
+      0.4,
+      { reasonEffort: getReasoningEffort() },
+    );
+    const cleaned = stripDraftBoilerplate(text).trim();
+    if (!cleaned) {
+      throw new Error('empty-rewrite');
+    }
+    return cleaned;
+  } finally {
+    popGroqOp();
   }
-  return cleaned;
 }

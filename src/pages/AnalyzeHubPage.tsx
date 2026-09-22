@@ -2,6 +2,7 @@ import { useNavigate } from 'react-router-dom';
 import { ArrowRight, FileText, ShieldCheck, Trash2 } from 'lucide-react';
 import { useHistory } from '../hooks/useHistory';
 import { useAnalysis } from '../contexts/AnalysisContext';
+import { useFeatureGate } from '../components/PlanUsage';
 import { formatRelativeTime, type HistoryEntry } from '../services/historyService';
 import { UploadDropzone } from '../components/UploadDropzone';
 import { EmptyState } from '../components/EmptyState';
@@ -76,6 +77,7 @@ export function AnalyzeHubPage() {
   const navigate = useNavigate();
   const { entries, remove } = useHistory();
   const { beginAnalysis, progress } = useAnalysis();
+  const canStartAnalysis = useFeatureGate();
 
   const analyses = entries
     .filter((entry) => entry.kind === 'analysis')
@@ -87,6 +89,9 @@ export function AnalyzeHubPage() {
     progress.stage !== 'error';
 
   function handleFileSelected(file: File) {
+    if (!canStartAnalysis('analysis')) {
+      return;
+    }
     void beginAnalysis(file);
     navigate('/analysis');
   }

@@ -3,6 +3,8 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { GeneratePage } from './GeneratePage';
+import { ToastProvider } from '../contexts/ToastContext';
+import { UpgradeProvider } from '../components/UpgradeDialog';
 
 const navigateMock = vi.fn();
 let beginWithTextMock: ReturnType<typeof vi.fn>;
@@ -14,6 +16,28 @@ vi.mock('react-router-dom', async (importOriginal) => {
     useNavigate: () => navigateMock,
   };
 });
+
+vi.mock('../contexts/AuthContext', () => ({
+  useAuth: () => ({ user: null }),
+}));
+
+vi.mock('../contexts/EntitlementContext', () => ({
+  useEntitlement: () => ({
+    usage: {
+      signedIn: true,
+      status: 'active',
+      planId: 'business',
+      planName: 'Business',
+      periodStart: null,
+      periodEnd: null,
+      analysis: { used: 0, quota: null, remaining: null },
+      draft: { used: 0, quota: null, remaining: null },
+      credits: 5,
+    },
+    loading: false,
+    refresh: async () => undefined,
+  }),
+}));
 
 vi.mock('../contexts/AnalysisContext', () => ({
   useAnalysis: () => ({ beginWithText: beginWithTextMock }),
@@ -42,7 +66,11 @@ function renderGenerate(path = '/generate') {
   seedHistory();
   return render(
     <MemoryRouter initialEntries={[path]}>
-      <GeneratePage />
+      <ToastProvider>
+        <UpgradeProvider>
+          <GeneratePage />
+        </UpgradeProvider>
+      </ToastProvider>
     </MemoryRouter>,
   );
 }
