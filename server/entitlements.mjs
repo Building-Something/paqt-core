@@ -139,12 +139,15 @@ function mapDeniedReason(result) {
 }
 
 /**
- * Attempts to book one unit of `op`. Returns { allowed, userId, error } where
+ * Attempts to book one unit of `op`. Pass a `runId` (the analysis/draft entry
+ * id) to make the charge idempotent: the first call for a run id books the
+ * unit, later calls for the same run id are free so retries and checkpoint
+ * resumes never double-charge. Returns { allowed, userId, error } where
  * `error` is a shaped { status, code, message } for unmetered failures, or
  * returns the DB result for metering decisions. Throws on infrastructure
  * failure so the caller can fail closed.
  */
-export async function consume(userId, op) {
+export async function consume(userId, op, runId) {
   if (op !== 'analysis' && op !== 'draft') {
     return { allowed: true, userId };
   }
@@ -153,6 +156,7 @@ export async function consume(userId, op) {
     const { data: result, error } = await admin.rpc('paqt_consume', {
       p_user: userId,
       p_op: op,
+      p_run: runId ?? null,
     });
     if (error) {
       throw error;

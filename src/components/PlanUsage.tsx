@@ -22,16 +22,62 @@ export function useFeatureGate() {
 
   return useCallback(
     (op: 'analysis' | 'draft'): boolean => {
-      if (loading) {
+      if (loading || !isPlanActive(usage)) {
         return true;
       }
       if (canRun(usage, op)) {
         return true;
       }
-      promptUpgrade(isPlanActive(usage) ? op : 'plan');
+      promptUpgrade(op);
       return false;
     },
     [usage, loading, promptUpgrade],
+  );
+}
+
+function UsageBlock({
+  label,
+  used,
+  quota,
+  remaining,
+  icon: Icon,
+}: {
+  label: string;
+  used: number;
+  quota: number | null;
+  remaining: number | null;
+  icon: typeof ScanSearch;
+}) {
+  const pct = quota && quota > 0 ? Math.min(100, (used / quota) * 100) : 0;
+  const exhausted = quota !== null && used >= quota;
+  return (
+    <div className="rounded-lg border border-border bg-card p-4">
+      <div className="flex items-center gap-1.5 text-sm font-medium text-foreground">
+        <Icon className="size-4 text-primary" aria-hidden="true" />
+        <span className="min-w-0 truncate">{label}</span>
+      </div>
+      <div className="mt-1.5 flex items-baseline gap-1.5">
+        <span
+          className={`text-3xl font-semibold tabular-nums ${
+            exhausted ? 'text-destructive' : 'text-foreground'
+          }`}
+        >
+          {used}
+        </span>
+        <span className="text-sm text-muted-foreground">of {quota ?? '∞'} this month</span>
+      </div>
+      <div className="mt-2.5 h-2 w-full overflow-hidden rounded-full bg-muted" aria-hidden="true">
+        <div
+          className={`h-full rounded-full ${exhausted ? 'bg-destructive' : 'bg-primary'}`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      {remaining !== null ? (
+        <p className={`mt-2 text-xs ${exhausted ? 'font-medium text-destructive' : 'text-muted-foreground'}`}>
+          {exhausted ? 'Monthly quota used up' : `${remaining} remaining this month`}
+        </p>
+      ) : null}
+    </div>
   );
 }
 
@@ -166,7 +212,14 @@ export function PlanUsageCard({ compact = false }: { compact?: boolean }) {
           <h2 className="text-sm font-semibold text-foreground">Plan &amp; billing</h2>
           <p className="mt-0.5 text-xs text-muted-foreground">
             {active
-              ? `${usage.planName ?? 'Active plan'} · resets every month`
+              ? `${usage.planName ?? 'Active plan'}${
+                  usage.periodEnd
+                    ? ` · resets ${new Date(usage.periodEnd).toLocaleDateString(undefined, {
+                        day: 'numeric',
+                        month: 'short',
+                      })}`
+                    : ' · resets every month'
+                }`
               : 'Subscribe to unlock analyses and drafts'}
           </p>
         </div>
@@ -186,11 +239,15 @@ export function PlanUsageCard({ compact = false }: { compact?: boolean }) {
                 <Coins className="size-3.5" aria-hidden="true" />
                 Business credits
               </div>
-              <p className="mt-1 text-lg font-semibold tabular-nums text-foreground">
+              <p
+                className={`mt-1 font-semibold tabular-nums text-foreground ${
+                  compact ? 'text-lg' : 'text-3xl'
+                }`}
+              >
                 {usage.credits ?? 0}
               </p>
             </div>
-          ) : (
+          ) : compact ? (
             <>
               <Meter
                 label="Analyses this month"
@@ -202,6 +259,23 @@ export function PlanUsageCard({ compact = false }: { compact?: boolean }) {
                 label="Drafts this month"
                 used={usage.draft.used}
                 quota={usage.draft.quota}
+                icon={FilePenLine}
+              />
+            </>
+          ) : (
+            <>
+              <UsageBlock
+                label="Analyses this month"
+                used={usage.analysis.used}
+                quota={usage.analysis.quota}
+                remaining={usage.analysis.remaining}
+                icon={ScanSearch}
+              />
+              <UsageBlock
+                label="Drafts this month"
+                used={usage.draft.used}
+                quota={usage.draft.quota}
+                remaining={usage.draft.remaining}
                 icon={FilePenLine}
               />
             </>
@@ -238,7 +312,10 @@ export function PlanUsageCard({ compact = false }: { compact?: boolean }) {
       {!compact ? (
         <div className="mt-4 flex items-center justify-between gap-3 border-t border-border pt-3">
           <p className="text-xs text-muted-foreground">
-            Resets monthly. Chat and draft revisions are always unlimited.
+            {usage.periodEnd
+              ? `Resets ${new Date(usage.periodEnd).toLocaleDateString()}.`
+              : 'Resets monthly.'}{' '}
+            Chat and draft revisions are always unlimited.
           </p>
           <button
             type="button"

@@ -47,6 +47,21 @@ describe('normalizeUsage', () => {
     expect(usage.credits).toBeNull();
   });
 
+  it('treats the RPC wire format (snake_case) as signed in', () => {
+    const usage = normalizeUsage({
+      signed_in: true,
+      status: 'active',
+      plan_id: 'individual',
+      plan_name: 'Individual',
+      analysis: { used: 1, quota: 5, remaining: 4, unit_price: null },
+      draft: { used: 0, quota: 5, remaining: 5 },
+      credits: null,
+    });
+    expect(usage.signedIn).toBe(true);
+    expect(isPlanActive(usage)).toBe(true);
+    expect(usage.analysis.remaining).toBe(4);
+  });
+
   it('tolerates missing and malformed payloads', () => {
     expect(normalizeUsage(undefined)).toEqual(NO_USAGE);
     expect(normalizeUsage(null)).toEqual(NO_USAGE);

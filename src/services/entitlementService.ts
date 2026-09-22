@@ -37,22 +37,24 @@ function toFiniteNumber(value: unknown, fallback: number | null): number | null 
 }
 
 function normalizeMeter(raw: unknown): MeterInfo {
-  const value = (raw ?? {}) as Partial<MeterInfo>;
+  const value = (raw ?? {}) as Record<string, unknown>;
+  const unitPrice = value.unit_price ?? value.unitPrice;
   return {
     used: toFiniteNumber(value.used, 0) ?? 0,
     quota: toFiniteNumber(value.quota, null),
     remaining: toFiniteNumber(value.remaining, null),
-    unitPrice: toFiniteNumber(value.unitPrice, null),
+    unitPrice: toFiniteNumber(unitPrice, null),
   };
 }
 
 export function normalizeUsage(raw: unknown): UsageSnapshot {
   const value = (raw ?? {}) as Record<string, unknown>;
-  if (value.signedIn === false || raw === null || raw === undefined) {
+  const signedIn = value.signed_in === true || value.signedIn === true;
+  if (raw === null || raw === undefined || signedIn === false) {
     return { ...NO_USAGE, signedIn: false };
   }
   return {
-    signedIn: value.signedIn === true,
+    signedIn,
     status: typeof value.status === 'string' ? value.status : 'none',
     planId: typeof value.plan_id === 'string' ? value.plan_id : null,
     planName: typeof value.plan_name === 'string' ? value.plan_name : null,

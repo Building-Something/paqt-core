@@ -140,6 +140,33 @@ create policy "usage_meters_select_own"
   to authenticated
   using ((select auth.uid()) = user_id);
 
+-- ---- Charged-run ledger: makes per-run consumption idempotent -----------
+-- Each metered run carries a client-supplied run id (the analysis/draft
+-- record id). The first request for a run books the unit; later requests for
+-- the SAME run id (retries, resumes after a freeze, checkpoint recovery) are
+-- served without charging again, so one logical analysis can never burn
+-- multiple quota units.
+create table if not exists public.usage_run_log (
+  user_id uuid not null references auth.users (id) on delete cascade,
+  period_start bigint not null,
+  op text not null check (op in ('analysis', 'draft')),
+  run_id text not null,
+  created_at bigint not null default 0,
+  primary key (user_id, period_start, op, run_id)
+);
+
+grant select, insert, update, delete on public.usage_run_log to service_role;
+revoke all on public.usage_run_log from anon, authenticated;
+
+alter table public.usage_run_log enable row level security;
+
+drop policy if exists "usage_run_log_manager_only" on public.usage_run_log;
+create policy "usage_run_log_manager_only"
+  on public.usage_run_log for all
+  to service_role
+  using (true)
+  with check (true);
+
 -- ---- Enterprise/Business prepaid credits ----
 create table if not exists public.enterprise_credits (
   user_id uuid primary key references auth.users (id) on delete cascade,
@@ -166,8 +193,8 @@ create policy "enterprise_credits_select_own"
 -- granted to the service role ONLY. Clients never call them.
 -- ============================================================
 
--- ---- paqt_consume(p_user, p_op): check + increment, atomic ----
-create or replace function public.paqt_consume(p_user uuid, p_op text)
+-- ---- paqt_consume(p_user, p_op, p_run): check + increment, atomic ----
+create or replace function public.paqt_consume(p_user uuid, p_op text, p_run text default null)
 returns jsonb
 language plpgsql
 security invoker
@@ -261,6 +288,24 @@ begin
     v_quota := v_plan.draft_quota;
   end if;
 
+  -- Idempotency: a run id that already booked this period costs nothing again.
+  if p_run is not null then
+    perform 1
+      from public.usage_run_log
+      where user_id = p_user
+        and period_start = v_profile.period_start
+        and op = p_op
+        and run_id = p_run;
+    if found then
+      return jsonb_build_object(
+        'allowed', true,
+        'plan', v_plan.id,
+        'run', p_run,
+        'repeat', true
+      );
+    end if;
+  end if;
+
   insert into public.usage_meters (
     user_id, period_start, analysis_used, draft_used, updated_at
   )
@@ -294,6 +339,12 @@ begin
     );
   end if;
 
+  if p_run is not null then
+    insert into public.usage_run_log (user_id, period_start, op, run_id, created_at)
+    values (p_user, v_profile.period_start, p_op, p_run, v_now)
+    on conflict (user_id, period_start, op, run_id) do nothing;
+  end if;
+
   return jsonb_build_object(
     'allowed', true,
     'plan', v_plan.id,
@@ -302,8 +353,8 @@ begin
 end;
 $$;
 
-revoke all on function public.paqt_consume(uuid, text) from public, anon, authenticated;
-grant execute on function public.paqt_consume(uuid, text) to service_role;
+revoke all on function public.paqt_consume(uuid, text, text) from public, anon, authenticated;
+grant execute on function public.paqt_consume(uuid, text, text) to service_role;
 
 -- ---- paqt_refund(p_user, p_op): restore a unit after upstream failure ----
 create or replace function public.paqt_refund(p_user uuid, p_op text)

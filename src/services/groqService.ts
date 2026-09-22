@@ -39,6 +39,7 @@ export type GroqOp = 'analysis' | 'draft' | 'chat' | 'clause';
 
 const opStack: GroqOp[] = ['chat'];
 let opFresh = true;
+let groqRunId: string | null = null;
 
 export function pushGroqOp(op: GroqOp): void {
   opStack.push(op);
@@ -50,6 +51,15 @@ export function popGroqOp(): void {
     opStack.pop();
     opFresh = true;
   }
+}
+
+/**
+ * Sets the idempotency key for the current metered run. Because the server
+ * books at most one unit per (user, period, op, run id), a checkpoint resume
+ * or a retry that reuses the same id can never double-charge the quota.
+ */
+export function setGroqRunId(id: string | null): void {
+  groqRunId = id;
 }
 
 let cachedAccessToken: string | null = null;
@@ -164,6 +174,9 @@ async function callGroq(
     };
     if (metered) {
       headers['x-paqt-metered'] = '1';
+      if (groqRunId) {
+        headers['x-paqt-run-id'] = groqRunId;
+      }
     }
     if (token) {
       headers.Authorization = `Bearer ${token}`;

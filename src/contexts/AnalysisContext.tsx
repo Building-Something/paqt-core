@@ -24,7 +24,12 @@ import {
   saveCheckpoint,
 } from '../services/checkpointService';
 import { extractContractText, extractPdfText } from '../services/pdfService';
-import { analyzePages, chatWithContract, setGroqWaitListener } from '../services/groqService';
+import {
+  analyzePages,
+  chatWithContract,
+  setGroqRunId,
+  setGroqWaitListener,
+} from '../services/groqService';
 import { GroqServiceError } from '../services/errors';
 import { groqErrorMessage, isBillingErrorCode, type GroqErrorCode } from '../utils/risks';
 import { buildDraftPages, splitDraftIntoSections } from '../utils/draft';
@@ -256,6 +261,7 @@ export function AnalysisProvider({ children }: AnalysisProviderProps) {
       setError(null);
       const checkpointId = options.checkpointId ?? null;
       lastCheckpointIdRef.current = checkpointId;
+      setGroqRunId(checkpointId);
 
       try {
         let workingPages = givenPages;
@@ -364,6 +370,7 @@ export function AnalysisProvider({ children }: AnalysisProviderProps) {
         setProgress(makeProgress('error', mapped.message));
       } finally {
         runningRef.current = false;
+        setGroqRunId(null);
       }
     },
     [toast, refreshUsage],

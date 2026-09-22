@@ -283,11 +283,16 @@ export async function groqProxyHandler(req, res) {
     // metered. Later requests of the same run (extra pages, more context) are
     // plan-checked only so one analysis/draft can never be double-charged.
     const metered = String(req.headers['x-paqt-metered'] ?? '1') === '1';
+    // Idempotency key: the client sends the analysis/draft entry id so resume
+    // and retry of the same run are served without booking a second unit.
+    const runId = typeof req.headers['x-paqt-run-id'] === 'string'
+      ? (req.headers['x-paqt-run-id'] || null)
+      : null;
 
     try {
       if (op === 'analysis' || op === 'draft') {
         if (metered) {
-          await consume(userId, op);
+          await consume(userId, op, runId);
           consumedOp = op;
         } else {
           const active = await isPlanActive(userId);
