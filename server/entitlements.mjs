@@ -115,6 +115,14 @@ function mapDeniedReason(result) {
         code: 'quota_exhausted',
         message: 'Monthly quota reached for this feature. Upgrade your plan to get more.',
       };
+    case 'no_run':
+      // A client asked to be metered without supplying an idempotency key. This
+      // is a client-side bug (or a forged request); never charge in that state.
+      return {
+        status: 400,
+        code: 'metering_key_required',
+        message: 'This request was metered without a run id. Refresh and try again.',
+      };
     case 'credits_exhausted':
       return {
         status: 402,

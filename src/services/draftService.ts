@@ -4,7 +4,9 @@ import {
   getReasoningEffort,
   pushGroqOp,
   popGroqOp,
+  setGroqRunId,
 } from './groqService';
+import { createHistoryId } from './historyService';
 import { DRAFT_DISCLAIMER_LINE } from '../utils/contractDocument';
 
 const DRAFT_MAX_TOKENS = 16_384;
@@ -101,6 +103,8 @@ export async function askDraftingQuestions(brief: string): Promise<string[]> {
 
 export async function generateContractDraft(brief: string, answers: DraftAnswers): Promise<string> {
   pushGroqOp('draft');
+  const runId = createHistoryId('draft');
+  setGroqRunId(runId);
   try {
     const userPrompt = `Assignment brief:\n${brief}\n\nAdditional details:\n${formatAnswers(answers)}`;
     return stripDraftBoilerplate(
@@ -109,6 +113,7 @@ export async function generateContractDraft(brief: string, answers: DraftAnswers
       }),
     );
   } finally {
+    setGroqRunId(null);
     popGroqOp();
   }
 }

@@ -8,6 +8,57 @@ import {
 
 const KEY_ID = Deno.env.get('RAZORPAY_KEY_ID') ?? '';
 
+const ACTIVE_SUB_STATUSES = new Set(['authenticated', 'active']);
+
+/**
+ * Guards against duplicate subscriptions for a customer:
+ *  - blocks checkout while an active (or first-payment-authenticated)
+ *    subscription exists, so users buy at most one subscription at a time;
+ *  - cancels stale "created" subscriptions (abandoned checkouts) older than
+ *    ten minutes so they stop piling up and emailing payment reminders.
+ */
+async function guardExistingSubscriptions(
+  customerId: string,
+): Promise<{ blocked: boolean; message?: string }> {
+  let items: Array<{ id: string; status?: string; created_at?: number }> = [];
+  try {
+    const response = await razorpay.subscriptions.all({ customer_id: customerId });
+    items = (response.items as Array<{ id: string; status?: string; created_at?: number }>) ?? [];
+  } catch (err) {
+    const detail = (err as Error)?.message ?? 'unknown error';
+    console.error('[create-checkout-session] could not list subscriptions:', detail);
+    return { blocked: false };
+  }
+
+  const nowSec = Math.floor(Date.now() / 1000);
+  for (const sub of items) {
+    if (sub.status && ACTIVE_SUB_STATUSES.has(sub.status)) {
+      return {
+        blocked: true,
+        message:
+          'You already have an active subscription. Cancel it from Plan & billing in Settings before starting another.',
+      };
+    }
+  }
+
+  for (const sub of items) {
+    if (
+      sub.status === 'created' &&
+      typeof sub.created_at === 'number' &&
+      nowSec - sub.created_at > 10 * 60
+    ) {
+      try {
+        await razorpay.subscriptions.cancel(sub.id, { cancel_at_cycle_end: false });
+        console.log('[create-checkout-session] cancelled stale subscription', sub.id);
+      } catch {
+        // Best-effort cleanup; never fail the checkout over an orphan.
+      }
+    }
+  }
+
+  return { blocked: false };
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders() });
@@ -65,6 +116,14 @@ Deno.serve(async (req) => {
   let subscription: Awaited<ReturnType<typeof razorpay.subscriptions.create>>;
   try {
     customerId = await getOrCreateCustomer(admin, userId, email, name);
+    const guard = await guardExistingSubscriptions(customerId);
+    if (guard.blocked) {
+      return jsonError(
+        409,
+        'active_subscription_exists',
+        guard.message ?? 'You already have an active subscription.',
+      );
+    }
     subscription = await razorpay.subscriptions.create({
       plan_id: plan.price_id,
       total_count: 12,

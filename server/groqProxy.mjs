@@ -289,6 +289,12 @@ export async function groqProxyHandler(req, res) {
       ? (req.headers['x-paqt-run-id'] || null)
       : null;
 
+    if (metered && !runId && (op === 'analysis' || op === 'draft')) {
+      console.warn(
+        `[paqt] metered request without x-paqt-run-id (op=${op}); DB will refuse the charge`,
+      );
+    }
+
     try {
       if (op === 'analysis' || op === 'draft') {
         if (metered) {

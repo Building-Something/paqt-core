@@ -156,7 +156,8 @@ create table if not exists public.usage_run_log (
 );
 
 grant select, insert, update, delete on public.usage_run_log to service_role;
-revoke all on public.usage_run_log from anon, authenticated;
+grant select on public.usage_run_log to authenticated;
+revoke all on public.usage_run_log from anon;
 
 alter table public.usage_run_log enable row level security;
 
@@ -166,6 +167,12 @@ create policy "usage_run_log_manager_only"
   to service_role
   using (true)
   with check (true);
+
+drop policy if exists "usage_run_log_select_own" on public.usage_run_log;
+create policy "usage_run_log_select_own"
+  on public.usage_run_log for select
+  to authenticated
+  using ((select auth.uid()) = user_id);
 
 -- ---- Enterprise/Business prepaid credits ----
 create table if not exists public.enterprise_credits (
@@ -193,7 +200,37 @@ create policy "enterprise_credits_select_own"
 -- granted to the service role ONLY. Clients never call them.
 -- ============================================================
 
--- ---- paqt_consume(p_user, p_op, p_run): check + increment, atomic ----
+-- ---- paqt_consume(p_user, p_op, p_run): check + book one unit, atomic ----
+-- The RUN LEDGER is the source of truth: `used` is the count of distinct run
+-- ids booked for (user, period, op). A metered request without a run id is
+-- refused ("no_run") so a run that never attaches an idempotency key can never
+-- burn quota. usage_meters is kept as a mirror of the ledger for the UI; it
+-- never governs a decision and is self-corrected on every consume.
+create or replace function public.paqt_sync_meter(p_user uuid, p_period bigint, p_now bigint)
+returns void
+language plpgsql
+security invoker
+set search_path = public
+as $$
+declare
+  v_a integer;
+  v_d integer;
+begin
+  select coalesce(count(*)::integer, 0) into v_a
+    from public.usage_run_log
+    where user_id = p_user and period_start = p_period and op = 'analysis';
+  select coalesce(count(*)::integer, 0) into v_d
+    from public.usage_run_log
+    where user_id = p_user and period_start = p_period and op = 'draft';
+  insert into public.usage_meters (user_id, period_start, analysis_used, draft_used, updated_at)
+  values (p_user, p_period, v_a, v_d, p_now)
+  on conflict (user_id, period_start) do update
+    set analysis_used = excluded.analysis_used,
+        draft_used = excluded.draft_used,
+        updated_at = excluded.updated_at;
+end;
+$$;
+
 create or replace function public.paqt_consume(p_user uuid, p_op text, p_run text default null)
 returns jsonb
 language plpgsql
@@ -213,8 +250,14 @@ begin
     return jsonb_build_object('allowed', false, 'reason', 'invalid');
   end if;
 
-  -- Serialize consumption per user so concurrent requests cannot both
-  -- pass the quota check.
+  -- Meterable units have no meaning without an idempotency key: without one we
+  -- could never deduplicate retries/resumes, so a single document run would
+  -- book multiple units. Refuse instead of charging.
+  if p_run is null or p_run = '' then
+    return jsonb_build_object('allowed', false, 'reason', 'no_run');
+  end if;
+
+  -- Serialize consumption per user so concurrent requests cannot both pass.
   perform pg_advisory_xact_lock(hashtext('paqt:meter:' || p_user::text));
 
   v_now := (extract(epoch from clock_timestamp()) * 1000)::bigint;
@@ -288,49 +331,37 @@ begin
     v_quota := v_plan.draft_quota;
   end if;
 
-  -- Idempotency: a run id that already booked this period costs nothing again.
-  if p_run is not null then
-    perform 1
+  -- Ledger-backed count: the number of distinct run ids booked this period.
+  select coalesce(count(*)::integer, 0) into v_used
+    from public.usage_run_log
+    where user_id = p_user
+      and period_start = v_profile.period_start
+      and op = p_op;
+
+  -- This run id already paid: retry/resume of the same analysis is always
+  -- free, even when the quota is otherwise exhausted.
+  if exists (
+    select 1
       from public.usage_run_log
       where user_id = p_user
         and period_start = v_profile.period_start
         and op = p_op
-        and run_id = p_run;
-    if found then
-      return jsonb_build_object(
-        'allowed', true,
-        'plan', v_plan.id,
-        'run', p_run,
-        'repeat', true
-      );
-    end if;
+        and run_id = p_run
+  ) then
+    perform public.paqt_sync_meter(p_user, v_profile.period_start, v_now);
+    return jsonb_build_object(
+      'allowed', true,
+      'plan', v_plan.id,
+      'run', p_run,
+      'used', v_used,
+      'quota', v_quota,
+      'remaining', greatest(0, v_quota - v_used),
+      'repeat', true
+    );
   end if;
 
-  insert into public.usage_meters (
-    user_id, period_start, analysis_used, draft_used, updated_at
-  )
-  values (
-    p_user,
-    v_profile.period_start,
-    case when p_op = 'analysis' then 1 else 0 end,
-    case when p_op = 'draft' then 1 else 0 end,
-    v_now
-  )
-  on conflict (user_id, period_start) do update
-    set analysis_used = usage_meters.analysis_used + case when p_op = 'analysis' then 1 else 0 end,
-        draft_used = usage_meters.draft_used + case when p_op = 'draft' then 1 else 0 end,
-        updated_at = v_now
-  where
-    (p_op = 'analysis' and usage_meters.analysis_used < v_quota)
-    or (p_op = 'draft' and usage_meters.draft_used < v_quota)
-  returning case when p_op = 'analysis' then analysis_used else draft_used end
-  into v_used;
-
-  if v_used is null then
-    select case when p_op = 'analysis' then analysis_used else draft_used end
-      into v_used
-      from public.usage_meters
-      where user_id = p_user and period_start = v_profile.period_start;
+  if v_used >= v_quota then
+    perform public.paqt_sync_meter(p_user, v_profile.period_start, v_now);
     return jsonb_build_object(
       'allowed', false,
       'reason', 'quota_exhausted',
@@ -339,22 +370,26 @@ begin
     );
   end if;
 
-  if p_run is not null then
-    insert into public.usage_run_log (user_id, period_start, op, run_id, created_at)
-    values (p_user, v_profile.period_start, p_op, p_run, v_now)
-    on conflict (user_id, period_start, op, run_id) do nothing;
-  end if;
+  insert into public.usage_run_log (user_id, period_start, op, run_id, created_at)
+  values (p_user, v_profile.period_start, p_op, p_run, v_now)
+  on conflict (user_id, period_start, op, run_id) do nothing;
+
+  v_used := v_used + 1;
+  perform public.paqt_sync_meter(p_user, v_profile.period_start, v_now);
 
   return jsonb_build_object(
     'allowed', true,
     'plan', v_plan.id,
-    'remaining', v_quota - v_used
+    'run', p_run,
+    'remaining', greatest(0, v_quota - v_used)
   );
 end;
 $$;
 
 revoke all on function public.paqt_consume(uuid, text, text) from public, anon, authenticated;
 grant execute on function public.paqt_consume(uuid, text, text) to service_role;
+revoke all on function public.paqt_sync_meter(uuid, bigint, bigint) from public, anon, authenticated;
+grant execute on function public.paqt_sync_meter(uuid, bigint, bigint) to service_role;
 
 -- ---- paqt_refund(p_user, p_op): restore a unit after upstream failure ----
 create or replace function public.paqt_refund(p_user uuid, p_op text)
@@ -455,6 +490,8 @@ grant execute on function public.paqt_plan_status(uuid) to service_role;
 -- ============================================================
 
 -- ---- paqt_my_usage(): everything the UI needs to render quotas ----
+-- Reads the same ledger paqt_consume books into, so the number the UI shows is
+-- always exactly the number of analysis/draft runs that have been charged.
 create or replace function public.paqt_my_usage()
 returns jsonb
 language plpgsql
@@ -465,10 +502,11 @@ declare
   uid uuid := auth.uid();
   v_profile public.profiles%rowtype;
   v_plan public.plans%rowtype;
-  v_meter public.usage_meters%rowtype;
-  v_credits numeric;
+  v_analysis_used integer;
+  v_draft_used integer;
   v_analysis_remaining integer;
   v_draft_remaining integer;
+  v_credits numeric;
 begin
   if uid is null then
     return jsonb_build_object('signed_in', false, 'status', 'none');
@@ -489,11 +527,14 @@ begin
   select * into v_plan from public.plans where id = v_profile.plan_id;
 
   if v_plan.analysis_quota is not null and v_plan.draft_quota is not null then
-    select * into v_meter
-      from public.usage_meters
-      where user_id = uid and period_start = v_profile.period_start;
-    v_analysis_remaining := greatest(0, v_plan.analysis_quota - coalesce(v_meter.analysis_used, 0));
-    v_draft_remaining := greatest(0, v_plan.draft_quota - coalesce(v_meter.draft_used, 0));
+    select coalesce(count(*)::integer, 0) into v_analysis_used
+      from public.usage_run_log
+      where user_id = uid and period_start = v_profile.period_start and op = 'analysis';
+    select coalesce(count(*)::integer, 0) into v_draft_used
+      from public.usage_run_log
+      where user_id = uid and period_start = v_profile.period_start and op = 'draft';
+    v_analysis_remaining := greatest(0, v_plan.analysis_quota - v_analysis_used);
+    v_draft_remaining := greatest(0, v_plan.draft_quota - v_draft_used);
     return jsonb_build_object(
       'signed_in', true,
       'status', v_profile.subscription_status,
@@ -502,12 +543,12 @@ begin
       'period_start', v_profile.period_start,
       'period_end', v_profile.period_end,
       'analysis', jsonb_build_object(
-        'used', coalesce(v_meter.analysis_used, 0),
+        'used', v_analysis_used,
         'quota', v_plan.analysis_quota,
         'remaining', v_analysis_remaining
       ),
       'draft', jsonb_build_object(
-        'used', coalesce(v_meter.draft_used, 0),
+        'used', v_draft_used,
         'quota', v_plan.draft_quota,
         'remaining', v_draft_remaining
       ),
@@ -544,3 +585,29 @@ $$;
 
 revoke all on function public.paqt_my_usage() from public, anon;
 grant execute on function public.paqt_my_usage() to authenticated;
+
+-- ---- Webhook event ledger ------------------------------------------------
+-- Exactly-once handling for Razorpay deliveries: event_id is the primary key,
+-- so duplicate deliveries and manual replays are ignored atomically.
+create table if not exists public.webhook_events (
+  event_id text primary key,
+  event_type text not null default '',
+  received_at bigint not null default 0
+);
+
+grant select, insert on public.webhook_events to service_role;
+revoke all on public.webhook_events from anon, authenticated;
+
+alter table public.webhook_events enable row level security;
+
+drop policy if exists "webhook_events_service_role" on public.webhook_events;
+create policy "webhook_events_service_role"
+  on public.webhook_events for all
+  to service_role
+  using (true)
+  with check (true);
+
+-- ---- Out-of-order event protection ---------------------------------------
+-- Tracks the newest event applied to a profile so a late-arriving renewal
+-- cannot resurrect a subscription that was cancelled afterwards.
+alter table public.profiles add column if not exists last_webhook_event_at bigint;

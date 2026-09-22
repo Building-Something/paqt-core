@@ -31,25 +31,24 @@ export type ReasoningEffort = 'low' | 'medium' | 'high';
 
 /**
  * Operation context attached to every Groq request so the server can enforce
- * the account's plan. 'analysis' and 'draft' are metered (exactly the FIRST
- * request of a run books the unit); 'chat' and 'clause' require an active plan
- * but never decrement a quota.
+ * the account's plan. 'analysis' and 'draft' carry an explicit metering header
+ * on every request; the DB books at most one unit per (user, period, op, run
+ * id), so only the first request of a run actually charges and each extra page
+ * or interaction of the same run is a free deduped repeat. 'chat' and 'clause'
+ * require an active plan but never decrement a quota.
  */
 export type GroqOp = 'analysis' | 'draft' | 'chat' | 'clause';
 
 const opStack: GroqOp[] = ['chat'];
-let opFresh = true;
 let groqRunId: string | null = null;
 
 export function pushGroqOp(op: GroqOp): void {
   opStack.push(op);
-  opFresh = true;
 }
 
 export function popGroqOp(): void {
   if (opStack.length > 1) {
     opStack.pop();
-    opFresh = true;
   }
 }
 
@@ -165,17 +164,25 @@ async function callGroq(
   let response: Response;
   try {
     const op = opStack[opStack.length - 1];
-    const metered = opFresh && (op === 'analysis' || op === 'draft');
-    opFresh = false;
+    // Metering is signalled explicitly on every analysis/draft request so the
+    // server never has to guess from a missing header. The DB books at most one
+    // unit per (user, period, op, run id), so marking every request of a run as
+    // metered is safe: the first call charges, all later calls of the same run
+    // are deduped by the ledger as free repeats. One analysis therefore makes as
+    // many Groq calls as it needs (pages, interaction, synthesis) while the
+    // monthly quota counts the run itself only once. A request outside a run
+    // (no id) is marked explicitly non-metered so it is checked against the
+    // plan but never billed and never refused.
+    const runId = groqRunId;
     const token = await getGroqAccessToken();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'x-paqt-op': op,
     };
-    if (metered) {
-      headers['x-paqt-metered'] = '1';
-      if (groqRunId) {
-        headers['x-paqt-run-id'] = groqRunId;
+    if (op === 'analysis' || op === 'draft') {
+      headers['x-paqt-metered'] = runId !== null ? '1' : '0';
+      if (runId !== null) {
+        headers['x-paqt-run-id'] = runId;
       }
     }
     if (token) {
