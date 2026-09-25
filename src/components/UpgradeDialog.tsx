@@ -7,6 +7,7 @@ import {
   type ReactNode,
 } from 'react';
 import { X, ScanSearch, FilePenLine, ArrowUpRight } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { useEntitlement } from '../contexts/EntitlementContext';
 import { useToast } from '../contexts/ToastContext';
 import {
@@ -73,6 +74,7 @@ export function UpgradeDialog({
 }) {
   const { usage, refresh } = useEntitlement();
   const { toast } = useToast();
+  const navigate = useNavigate();
   const [busyPlan, setBusyPlan] = useState<string | null>(null);
 
   const hasPlan = Boolean(usage.planId);
@@ -110,12 +112,18 @@ export function UpgradeDialog({
     try {
       const info = await manageSubscription();
       const planName = PLANS.find((plan) => plan.id === info.planId)?.name ?? info.planId ?? 'your plan';
-      if (info.periodEnd) {
+      if (info.status === 'canceling') {
+        toast('info', `Your ${planName} plan was cancelled. You have access until ${new Date(
+          info.periodEnd ?? Date.now(),
+        ).toLocaleDateString()}.`);
+      } else if (info.periodEnd) {
         const date = new Date(info.periodEnd).toLocaleDateString();
-        toast('info', `You're on ${planName}. Your plan renews on ${date}. Cancel from Plan & billing in Settings.`);
+        toast('info', `You're on ${planName}. Your plan renews on ${date}. Manage or cancel from Plan & billing in Settings.`);
       } else {
         toast('info', `You're on ${planName}. Manage or cancel from Plan & billing in Settings.`);
       }
+      onClose();
+      navigate('/settings');
     } catch (caught) {
       const message =
         (caught as CheckoutError)?.message ?? 'Could not load billing details. Try again in a moment.';

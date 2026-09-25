@@ -1,4 +1,4 @@
-import { Check, ArrowUpRight, Loader2 } from 'lucide-react';
+import { Check, ArrowUpRight, Loader2, BadgeCheck } from 'lucide-react';
 import { Button } from './ui/button';
 import { Card } from './ui/card';
 
@@ -32,7 +32,10 @@ export function PlanCard({
     >
       <div className="flex items-center justify-between gap-2">
         <div>
-          <p className="text-sm font-semibold text-foreground">{name}</p>
+          <p className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
+            {name}
+            {active ? <BadgeCheck className="size-4 text-primary" aria-hidden="true" /> : null}
+          </p>
           {price !== undefined ? (
             <p className="text-2xl font-semibold tracking-tight text-foreground">
               ₹{price.toLocaleString('en-IN')}
@@ -68,11 +71,6 @@ export function PlanCard({
             {cta}
             {!busy ? <ArrowUpRight className="size-4" aria-hidden="true" /> : null}
           </Button>
-        ) : null}
-        {active ? (
-          <p className="mt-1 w-full text-center text-xs font-medium text-primary">
-            Your current plan
-          </p>
         ) : null}
       </div>
     </Card>
