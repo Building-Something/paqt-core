@@ -81,6 +81,11 @@ export function jsonOk(extra = {}) {
     method: 'POST'
   });
 }
+/** Clears any pending scheduled changes (e.g. a cancel at cycle end) without touching the live sub. */ export async function razorpayCancelScheduledChanges(subscriptionId) {
+  return razorpayApi(`/subscriptions/${subscriptionId}/cancel_scheduled_changes`, {
+    method: 'POST'
+  });
+}
 /** Switches the plan of a live subscription in place. */ export async function razorpayChangePlan(subscriptionId, planId) {
   return razorpayApi(`/subscriptions/${subscriptionId}`, {
     method: 'PATCH',

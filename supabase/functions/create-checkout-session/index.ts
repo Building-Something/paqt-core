@@ -5,6 +5,7 @@ import {
   jsonError,
   ms,
   razorpay,
+  razorpayCancelScheduledChanges,
   razorpayChangePlan,
   razorpayResume,
 } from '../_shared/razorpay.ts';
@@ -13,16 +14,25 @@ const KEY_ID = Deno.env.get('RAZORPAY_KEY_ID') ?? '';
 
 const ACTIVE_SUB_STATUSES = new Set(['authenticated', 'active']);
 
-type SubscriptionEntity = { id?: string; status?: string; created_at?: number; plan_id?: string };
+type SubscriptionEntity = {
+  id?: string;
+  status?: string;
+  created_at?: number;
+  plan_id?: string;
+  customer_id?: string;
+};
 
 /**
- * Lists a customer's subscriptions. Returns an empty list on any failure so
- * checkout never fails over a Razorpay listing hiccup.
+ * Lists a customer's subscriptions. Razorpay's list endpoint has no customer
+ * filter, so we list recent subscriptions and filter client-side. Returns an
+ * empty list on any failure so checkout never fails over a listing hiccup.
  */
 async function listSubscriptions(customerId: string): Promise<SubscriptionEntity[]> {
   try {
-    const response = await razorpay.subscriptions.all({ customer_id: customerId });
-    return (response.items as SubscriptionEntity[]) ?? [];
+    const response = await razorpay.subscriptions.all({ count: 100 });
+    return ((response.items as SubscriptionEntity[]) ?? []).filter(
+      (sub) => sub.customer_id === customerId,
+    );
   } catch (err) {
     const detail = (err as Error)?.message ?? 'unknown error';
     console.error('[create-checkout-session] could not list subscriptions:', detail);
@@ -124,25 +134,89 @@ Deno.serve(async (req) => {
       plan_id?: string | null;
     } | null;
 
+    // Clean abandoned (unpaid) checkout subscriptions regardless of the
+    // active-subscription state below.
+    await cancelStaleCreated(items);
+
     const active = items.find(
       (sub) => sub.status && ACTIVE_SUB_STATUSES.has(sub.status),
     );
 
-    // Renew / upgrade: the (only) live subscription was cancelled at cycle end
-    // and the user picked a plan again. Switch the existing Razorpay
-    // subscription in place — resume it (undo the scheduled cancel) and change
-    // its plan — instead of creating a second subscription. This keeps a
-    // single subscription per customer and lets the UI skip the payment modal.
-    if (
-      active?.id &&
-      profile?.subscription_status === 'canceling' &&
-      profile.subscription_id === active.id
-    ) {
+    // Renew / upgrade: the profile is in the cancelling state while the live
+    // Razorpay subscription may be genuinely active (no pending cancel), paused,
+    // or scheduled to cancel at cycle end. Undo only what actually needs undoing
+    // — paused subs are resumed via /resume, a pending cancel-at-cycle-end is
+    // cleared via /cancel_scheduled_changes, and an active sub with no pending
+    // changes is already billing and needs no API call at all. Plans are switched
+    // in place where the payment method allows it; subs paid by UPI/emandate
+    // reject updates, so we fall back to a fresh subscription.
+    // The profile's stored subscription_id may trail the live one (e.g. after an
+    // interrupted upgrade), so the cancel state is the source of truth.
+    if (active?.id && profile?.subscription_status === 'canceling') {
       try {
-        await razorpayResume(active.id);
-        if (active.plan_id && active.plan_id !== plan.price_id) {
-          await razorpayChangePlan(active.id, plan.price_id);
+        const current = await razorpay.subscriptions.fetch(active.id);
+        const liveStatus = (current as { status?: string }).status ?? active.status;
+        const hasPendingChange =
+          (current as { has_scheduled_changes?: boolean }).has_scheduled_changes === true;
+
+        if (liveStatus === 'paused' || liveStatus === 'halted') {
+          await razorpayResume(active.id);
+        } else if (hasPendingChange) {
+          await razorpayCancelScheduledChanges(active.id);
+        } else {
+          console.info(
+            '[create-checkout-session] renew: live sub is already active with no pending change; nothing to undo.',
+            active.id,
+          );
         }
+
+        if (active.plan_id && active.plan_id !== plan.price_id) {
+          try {
+            await razorpayChangePlan(active.id, plan.price_id);
+          } catch (planErr) {
+            const pd =
+              (planErr as { error?: { description?: string } })?.error?.description ??
+              (planErr as Error)?.message ??
+              'unknown error';
+            console.error(
+              '[create-checkout-session] in-place plan change unsupported, creating a fresh subscription instead:',
+              pd,
+            );
+            const upgraded = await razorpay.subscriptions.create({
+              plan_id: plan.price_id,
+              total_count: 12,
+              customer_id: customerId,
+              customer_notify: 1,
+              notes: { user_id: userId, plan_id: plan.id },
+            });
+            // Stop the old sub after its already-paid current cycle so the
+            // customer is never double-charged beyond the new plan's first cycle.
+            await razorpay.subscriptions.cancel(active.id, { cancel_at_cycle_end: 1 });
+
+            await admin
+              .from('profiles')
+              .upsert(
+                {
+                  user_id: userId,
+                  payment_customer_id: customerId,
+                  subscription_id: upgraded.id,
+                  updated_at: Date.now(),
+                },
+                { onConflict: 'user_id' },
+              );
+
+            return new Response(
+              JSON.stringify({
+                key_id: KEY_ID,
+                subscription_id: upgraded.id,
+                name,
+                email,
+              }),
+              { headers: { 'Content-Type': 'application/json', ...corsHeaders() } },
+            );
+          }
+        }
+
         const updated = await razorpay.subscriptions.fetch(active.id);
         const periodEndSec = (updated as { current_end?: number }).current_end ?? null;
         const currentStartSec = (updated as { current_start?: number }).current_start ?? null;
@@ -195,8 +269,6 @@ Deno.serve(async (req) => {
       );
     }
 
-    await cancelStaleCreated(items);
-
     const subscription = await razorpay.subscriptions.create({
       plan_id: plan.price_id,
       total_count: 12,
@@ -219,6 +291,16 @@ Deno.serve(async (req) => {
         },
         { onConflict: 'user_id' },
       );
+
+    return new Response(
+      JSON.stringify({
+        key_id: KEY_ID,
+        subscription_id: subscription.id,
+        name,
+        email,
+      }),
+      { headers: { 'Content-Type': 'application/json', ...corsHeaders() } },
+    );
   } catch (err) {
     const detail =
       (err as { error?: { description?: string } })?.error?.description ??
@@ -227,14 +309,4 @@ Deno.serve(async (req) => {
     console.error('[create-checkout-session] razorpay call failed:', detail);
     return jsonError(502, 'razorpay_error', `Razorpay could not start the subscription: ${detail}`);
   }
-
-  return new Response(
-    JSON.stringify({
-      key_id: KEY_ID,
-      subscription_id: subscription.id,
-      name,
-      email,
-    }),
-    { headers: { 'Content-Type': 'application/json', ...corsHeaders() } },
-  );
 });

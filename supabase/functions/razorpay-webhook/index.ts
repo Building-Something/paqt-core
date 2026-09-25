@@ -161,13 +161,20 @@ async function applySubscriptionProfile(
       .update(profile)
       .eq('payment_customer_id', customerId)
       .select('user_id');
-    if (!updated.error && (updated.data?.length ?? 0) > 0) {
+    if (updated.error) {
+      console.error(
+        `[razorpay-webhook] failed to mirror subscription for customer ${customerId}:`,
+        updated.error.message,
+      );
+      return false;
+    }
+    if ((updated.data?.length ?? 0) > 0) {
       return true;
     }
   }
 
   if (notesUserId) {
-    const { error } = await admin
+    const upserted = await admin
       .from('profiles')
       .upsert(
         {
@@ -176,14 +183,27 @@ async function applySubscriptionProfile(
           ...profile,
         },
         { onConflict: 'user_id' },
+      )
+      .select('user_id');
+    if (upserted.error) {
+      console.error(
+        `[razorpay-webhook] failed to mirror subscription for user ${notesUserId}:`,
+        upserted.error.message,
       );
-    if (!error) {
+      return false;
+    }
+    if ((upserted.data?.length ?? 0) > 0) {
       return true;
     }
   }
 
-  console.error('[razorpay-webhook] failed to mirror subscription for customer', customerId);
-  return false;
+  // No matching profile — orphan/test event for a customer Paqt does not
+  // track. Acknowledge it instead of returning 500 (which makes Razorpay
+  // retry forever).
+  console.info(
+    `[razorpay-webhook] no profile to mirror subscription for ${customerId || notesUserId || '(unknown)'}`,
+  );
+  return true;
 }
 
 /**
@@ -234,18 +254,41 @@ async function applyEndOfSubscription(
         .update(profile)
         .eq('payment_customer_id', customerId)
         .select('user_id');
-      if (!updated.error && (updated.data?.length ?? 0) > 0) {
+      if (updated.error) {
+        console.error(
+          `[razorpay-webhook] failed to schedule end-of-billing for ${customerId}:`,
+          updated.error.message,
+        );
+        return false;
+      }
+      if ((updated.data?.length ?? 0) > 0) {
         return true;
       }
     }
     if (notesUserId) {
-      const { error } = await admin.from('profiles').update(profile).eq('user_id', notesUserId);
-      if (!error) {
+      const updated = await admin
+        .from('profiles')
+        .update(profile)
+        .eq('user_id', notesUserId)
+        .select('user_id');
+      if (updated.error) {
+        console.error(
+          `[razorpay-webhook] failed to schedule end-of-billing for user ${notesUserId}:`,
+          updated.error.message,
+        );
+        return false;
+      }
+      if ((updated.data?.length ?? 0) > 0) {
         return true;
       }
     }
-    console.error('[razorpay-webhook] failed to schedule end-of-billing for', customerId);
-    return false;
+    // No matching profile — orphan/test event for a customer Paqt does not
+    // track. Acknowledge it instead of returning 500 (which makes Razorpay
+    // retry forever).
+    console.info(
+      `[razorpay-webhook] no profile to schedule end-of-billing for ${customerId || notesUserId || '(unknown)'}`,
+    );
+    return true;
   }
 
   const clear = {
@@ -262,21 +305,39 @@ async function applyEndOfSubscription(
       .update(clear)
       .eq('payment_customer_id', customerId)
       .select('user_id');
-    if (!updated.error && (updated.data?.length ?? 0) > 0) {
+    if (updated.error) {
+      console.error(
+        `[razorpay-webhook] failed to clear subscription for ${customerId}:`,
+        updated.error.message,
+      );
+      return false;
+    }
+    if ((updated.data?.length ?? 0) > 0) {
       return true;
     }
   }
   if (notesUserId) {
-    const { error } = await admin
+    const updated = await admin
       .from('profiles')
       .update(clear)
-      .eq('user_id', notesUserId);
-    if (!error) {
+      .eq('user_id', notesUserId)
+      .select('user_id');
+    if (updated.error) {
+      console.error(
+        `[razorpay-webhook] failed to clear subscription for user ${notesUserId}:`,
+        updated.error.message,
+      );
+      return false;
+    }
+    if ((updated.data?.length ?? 0) > 0) {
       return true;
     }
   }
-  console.error('[razorpay-webhook] failed to clear subscription for', customerId);
-  return false;
+  // No matching profile — orphan/test event. Acknowledge instead of 500.
+  console.info(
+    `[razorpay-webhook] no profile to clear subscription for ${customerId || notesUserId || '(unknown)'}`,
+  );
+  return true;
 }
 
 /** Marks the profile past_due when a recurring payment fails. */

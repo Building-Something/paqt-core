@@ -59,12 +59,12 @@ Deno.serve(async (req) => {
       // up the live subscription from Razorpay so cancellation never spuriously
       // fails with no_subscription while a subscription actually exists.
       try {
-        const response = await razorpay.subscriptions.all({
-          customer_id: profile.payment_customer_id,
-        });
-        const items = (response.items as Array<{ id: string; status?: string }>) ?? [];
-        const live = items.find((item) =>
-          ['active', 'authenticated'].includes(item.status ?? ''),
+        const response = await razorpay.subscriptions.all({ count: 100 });
+        const items = (response.items as Array<{ id: string; status?: string; customer_id?: string }>) ?? [];
+        const live = items.find(
+          (item) =>
+            item.customer_id === profile.payment_customer_id &&
+            ['active', 'authenticated'].includes(item.status ?? ''),
         );
         subscriptionId = live?.id ?? null;
       } catch (err) {
