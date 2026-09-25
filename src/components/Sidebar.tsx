@@ -29,11 +29,11 @@ function HealthBadge() {
 
   const meta =
     health.status === 'ok'
-      ? { dot: 'bg-low-500', label: 'AI connected' }
+      ? { dot: 'bg-low-500', label: 'AI ready' }
       : health.status === 'missing'
-        ? { dot: 'bg-medium-500', label: 'AI key not set' }
+        ? { dot: 'bg-medium-500', label: 'AI not ready yet' }
         : health.status === 'offline'
-          ? { dot: 'bg-critical-500', label: 'Server offline' }
+          ? { dot: 'bg-critical-500', label: 'Service offline' }
           : { dot: 'bg-muted-foreground/40', label: 'Checking' };
 
   return (

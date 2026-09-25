@@ -55,7 +55,7 @@ const FEATURES = [
     icon: ShieldCheck,
     title: 'Built to stay lean',
     description:
-      'PDFs are extracted in your browser and analyzed through Paqt’s server proxy. Account history stores compact summaries and small previews, not raw files — so storage stays flat across thousands of reviews.',
+      'Your PDF is read on your device and reviewed privately through Paqt. Your account history stores compact summaries and small previews, not raw files — so storage stays flat across thousands of reviews.',
   },
 ];
 
@@ -64,7 +64,7 @@ const STEPS = [
     number: '01',
     title: 'Upload a document',
     description:
-      'Drop in a PDF — NDAs, MSAs, vendor agreements, anything. Text is extracted in your browser, page by page.',
+      'Drop in a PDF — NDAs, MSAs, vendor agreements, anything. Paqt reads it on your device, page by page.',
   },
   {
     number: '02',
@@ -104,7 +104,7 @@ const FAQS = [
   {
     question: 'Is my document uploaded anywhere?',
     answer:
-      'Extraction happens entirely in your browser. The extracted text is analyzed through Paqt’s server proxy to the AI provider. We never store the original PDF — your account history keeps a compact summary of each review plus a small page preview.',
+      'Your document is read on your device and the text is analyzed privately through Paqt. We never store the original PDF — your account history keeps a compact summary of each review plus a small page preview.',
   },
   {
     question: 'Can I reopen an analysis without re-running the AI?',
@@ -114,7 +114,7 @@ const FAQS = [
   {
     question: 'What do I need to get started?',
     answer:
-      'Create a free account, then open your workspace. Analysis features also need a GROQ_API_KEY configured on the server side (set in .env) — the key never ships to the browser.',
+      'Create a free account, then open your workspace — your analyses are ready to go.',
   },
 ];
 
@@ -343,7 +343,7 @@ export function LandingPage() {
                   </li>
                   <li className="inline-flex items-center gap-1.5">
                     <Check className="size-3.5 text-low-600" aria-hidden="true" />
-                    PDFs extracted in your browser
+                    PDFs read privately on your device
                   </li>
                   <li className="inline-flex items-center gap-1.5">
                     <Check className="size-3.5 text-low-600" aria-hidden="true" />

@@ -202,9 +202,9 @@ export function isBillingErrorCode(code: string): boolean {
 export function groqErrorMessage(code: GroqErrorCode): string {
   switch (code) {
     case 'not_configured':
-      return 'Groq API key is not configured on the server. Add GROQ_API_KEY and restart Paqt.';
+      return 'Paqt is not fully set up yet. Please contact support to enable AI analysis.';
     case 'invalid_key':
-      return 'Your Groq API key was rejected. Check the server environment variable.';
+      return 'The AI service could not authenticate Paqt. Please contact support.';
     case 'rate_limited':
       return 'The AI service is temporarily rate-limited. Paqt will retry automatically; try again shortly.';
     case 'rate_limited_daily':

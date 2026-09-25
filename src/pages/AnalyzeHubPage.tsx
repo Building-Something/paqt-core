@@ -107,9 +107,8 @@ export function AnalyzeHubPage() {
         Run a contract review
       </h1>
       <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-        Upload a PDF and Paqt extracts the text in your browser, then flags the
-        clauses that deserve your attention with the exact page and quote behind
-        each finding.
+        Upload a PDF and Paqt flags the clauses that deserve your attention with
+        the exact page and quote behind each finding.
       </p>
 
       <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
@@ -119,7 +118,7 @@ export function AnalyzeHubPage() {
         </span>
         <span aria-hidden="true" className="text-muted-foreground/40">·</span>
         <span>
-          Extracted locally in your browser, saved to your private account, never shared.
+          Extracted on your device, saved to your private account, never shared.
         </span>
       </div>
 
@@ -177,7 +176,7 @@ export function AnalyzeHubPage() {
       <div className="mt-8 flex items-start gap-2.5 rounded-xl border border-border bg-card px-4 py-3">
         <ArrowRight className="mt-0.5 size-4 shrink-0 rotate-180 text-muted-foreground/60" aria-hidden="true" />
         <p className="text-xs leading-relaxed text-muted-foreground">
-          Completed reviews reopen instantly from browser history — no AI re-run needed. Leave a
+          Completed reviews reopen instantly — no re-analysis needed. Leave a
           review mid-way and it resumes from the last analyzed page.
         </p>
       </div>

@@ -340,7 +340,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       error: historyWiped
         ? identityRemoved
           ? null
-          : 'Your history and files were deleted, but your login record still exists in Supabase Auth. Run the delete_user SQL from supabase/schema.sql in the Supabase dashboard (Account -> SQL editor) to permanently remove the login, or delete the user under Authentication -> Users.'
+          : 'Your history and files were deleted, but your login record could not be removed automatically. Please contact support to finish deleting your account.'
         : 'Your files were removed, but some history could not be wiped automatically.',
     };
   }, [user, signOut, unbindHistoryToUser]);

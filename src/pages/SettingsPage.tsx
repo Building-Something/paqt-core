@@ -68,7 +68,7 @@ export function SettingsPage() {
       <h1 className="mt-1 text-3xl font-semibold tracking-tight text-foreground">Settings</h1>
       <p className="mt-2 text-sm text-muted-foreground">
         Signed in as <span className="font-medium text-foreground">{user?.email}</span>. Your
-        reviews are saved to your Supabase account — nothing is stored only on this device.
+        reviews are saved to your account — nothing is stored only on this device.
       </p>
 
       <div className="mt-8">
@@ -164,7 +164,7 @@ export function SettingsPage() {
 
       <p className="mt-8 flex items-center gap-2 text-xs text-muted-foreground">
         <ShieldCheck className="size-4 text-primary" aria-hidden="true" />
-        Your contract or PDF is safe — reviews live in your private Supabase account.
+        Your contract or PDF is safe — reviews live in your private account.
       </p>
     </div>
   );
