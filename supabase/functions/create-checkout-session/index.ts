@@ -3,49 +3,45 @@ import {
   createAdmin,
   getOrCreateCustomer,
   jsonError,
+  ms,
   razorpay,
+  razorpayChangePlan,
+  razorpayResume,
 } from '../_shared/razorpay.ts';
 
 const KEY_ID = Deno.env.get('RAZORPAY_KEY_ID') ?? '';
 
 const ACTIVE_SUB_STATUSES = new Set(['authenticated', 'active']);
 
+type SubscriptionEntity = { id?: string; status?: string; created_at?: number; plan_id?: string };
+
 /**
- * Guards against duplicate subscriptions for a customer:
- *  - blocks checkout while an active (or first-payment-authenticated)
- *    subscription exists, so users buy at most one subscription at a time;
- *  - cancels stale "created" subscriptions (abandoned checkouts) older than
- *    ten minutes so they stop piling up and emailing payment reminders.
+ * Lists a customer's subscriptions. Returns an empty list on any failure so
+ * checkout never fails over a Razorpay listing hiccup.
  */
-async function guardExistingSubscriptions(
-  customerId: string,
-): Promise<{ blocked: boolean; message?: string }> {
-  let items: Array<{ id: string; status?: string; created_at?: number }> = [];
+async function listSubscriptions(customerId: string): Promise<SubscriptionEntity[]> {
   try {
     const response = await razorpay.subscriptions.all({ customer_id: customerId });
-    items = (response.items as Array<{ id: string; status?: string; created_at?: number }>) ?? [];
+    return (response.items as SubscriptionEntity[]) ?? [];
   } catch (err) {
     const detail = (err as Error)?.message ?? 'unknown error';
     console.error('[create-checkout-session] could not list subscriptions:', detail);
-    return { blocked: false };
+    return [];
   }
+}
 
+/**
+ * Cancels stale "created" subscriptions (abandoned checkouts) older than ten
+ * minutes so they stop piling up and emailing payment reminders.
+ */
+async function cancelStaleCreated(items: SubscriptionEntity[]): Promise<void> {
   const nowSec = Math.floor(Date.now() / 1000);
-  for (const sub of items) {
-    if (sub.status && ACTIVE_SUB_STATUSES.has(sub.status)) {
-      return {
-        blocked: true,
-        message:
-          'You already have an active subscription. Cancel it from Plan & billing in Settings before starting another.',
-      };
-    }
-  }
-
   for (const sub of items) {
     if (
       sub.status === 'created' &&
       typeof sub.created_at === 'number' &&
-      nowSec - sub.created_at > 10 * 60
+      nowSec - sub.created_at > 10 * 60 &&
+      sub.id
     ) {
       try {
         await razorpay.subscriptions.cancel(sub.id, { cancel_at_cycle_end: false });
@@ -55,8 +51,6 @@ async function guardExistingSubscriptions(
       }
     }
   }
-
-  return { blocked: false };
 }
 
 Deno.serve(async (req) => {
@@ -113,18 +107,97 @@ Deno.serve(async (req) => {
   const email = userData.user.email ?? '';
 
   let customerId: string;
-  let subscription: Awaited<ReturnType<typeof razorpay.subscriptions.create>>;
   try {
     customerId = await getOrCreateCustomer(admin, userId, email, name);
-    const guard = await guardExistingSubscriptions(customerId);
-    if (guard.blocked) {
+    const items = await listSubscriptions(customerId);
+
+    // Track which subscription id the profile currently points at so renew and
+    // upgrade can recognise the existing subscription instead of 409ing.
+    const { data: profileRows } = await admin
+      .from('profiles')
+      .select('subscription_status, subscription_id, plan_id')
+      .eq('user_id', userId)
+      .maybeSingle();
+    const profile = profileRows as {
+      subscription_status?: string;
+      subscription_id?: string | null;
+      plan_id?: string | null;
+    } | null;
+
+    const active = items.find(
+      (sub) => sub.status && ACTIVE_SUB_STATUSES.has(sub.status),
+    );
+
+    // Renew / upgrade: the (only) live subscription was cancelled at cycle end
+    // and the user picked a plan again. Switch the existing Razorpay
+    // subscription in place — resume it (undo the scheduled cancel) and change
+    // its plan — instead of creating a second subscription. This keeps a
+    // single subscription per customer and lets the UI skip the payment modal.
+    if (
+      active?.id &&
+      profile?.subscription_status === 'canceling' &&
+      profile.subscription_id === active.id
+    ) {
+      try {
+        await razorpayResume(active.id);
+        if (active.plan_id && active.plan_id !== plan.price_id) {
+          await razorpayChangePlan(active.id, plan.price_id);
+        }
+        const updated = await razorpay.subscriptions.fetch(active.id);
+        const periodEndSec = (updated as { current_end?: number }).current_end ?? null;
+        const currentStartSec = (updated as { current_start?: number }).current_start ?? null;
+        const periodStart = ms(currentStartSec);
+        const periodEnd = ms(periodEndSec);
+
+        await admin
+          .from('profiles')
+          .update({
+            plan_id: plan.id,
+            subscription_status: 'active',
+            subscription_id: active.id,
+            period_start: typeof periodStart === 'bigint' ? Number(periodStart) : null,
+            period_end: typeof periodEnd === 'bigint' ? Number(periodEnd) : null,
+            updated_at: Date.now(),
+          })
+          .eq('user_id', userId);
+
+        return new Response(
+          JSON.stringify({
+            switched: true,
+            key_id: KEY_ID,
+            subscription_id: active.id,
+            plan_id: plan.id,
+            period_end: typeof periodEnd === 'bigint' ? Number(periodEnd) : null,
+          }),
+          { headers: { 'Content-Type': 'application/json', ...corsHeaders() } },
+        );
+      } catch (err) {
+        const detail =
+          (err as { error?: { description?: string } })?.error?.description ??
+          (err as Error)?.message ??
+          'unknown error';
+        console.error('[create-checkout-session] renew/upgrade failed:', detail);
+        return jsonError(
+          502,
+          'razorpay_error',
+          `Razorpay could not renew your subscription: ${detail}`,
+        );
+      }
+    }
+
+    // A genuinely active subscription (not scheduled to cancel) blocks a new
+    // one — there is no legitimate reason to hold two at once.
+    if (active?.id) {
       return jsonError(
         409,
         'active_subscription_exists',
-        guard.message ?? 'You already have an active subscription.',
+        'You already have an active subscription. Cancel it from Plan & billing in Settings before starting another.',
       );
     }
-    subscription = await razorpay.subscriptions.create({
+
+    await cancelStaleCreated(items);
+
+    const subscription = await razorpay.subscriptions.create({
       plan_id: plan.price_id,
       total_count: 12,
       customer_id: customerId,

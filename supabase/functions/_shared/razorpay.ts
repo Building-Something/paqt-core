@@ -54,6 +54,41 @@ export function jsonOk(extra = {}) {
     }
   });
 }
+/** Low-level Razorpay REST call using basic auth (SDK lacks resume/plan-switch). */ async function razorpayApi(path, init = {}) {
+  const auth = `Basic ${btoa(`${RAZORPAY_KEY_ID}:${RAZORPAY_KEY_SECRET}`)}`;
+  const response = await fetch(`https://api.razorpay.com/v1${path}`, {
+    ...init,
+    headers: {
+      Authorization: auth,
+      'Content-Type': 'application/json',
+      ...(init.headers ?? {})
+    }
+  });
+  const text = await response.text();
+  let parsed = {};
+  try {
+    parsed = text ? JSON.parse(text) : {};
+  } catch  {
+    parsed = {};
+  }
+  if (!response.ok) {
+    throw new Error(`Razorpay ${path} failed: ${response.status} ${text}`);
+  }
+  return parsed;
+}
+/** Undoes a scheduled cancellation (subscription.cancel at cycle end) so the sub resumes billing. */ export async function razorpayResume(subscriptionId) {
+  return razorpayApi(`/subscriptions/${subscriptionId}/resume`, {
+    method: 'POST'
+  });
+}
+/** Switches the plan of a live subscription in place. */ export async function razorpayChangePlan(subscriptionId, planId) {
+  return razorpayApi(`/subscriptions/${subscriptionId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      plan_id: planId
+    })
+  });
+}
 /** Resolves the Paqt plan id for a Razorpay plan id (stored in plans.price_id). */ export async function planIdForPrice(admin, priceId) {
   const { data } = await admin.from('plans').select('id').eq('price_id', priceId).maybeSingle();
   return data?.id ?? null;

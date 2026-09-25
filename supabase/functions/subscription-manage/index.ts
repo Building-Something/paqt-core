@@ -28,7 +28,7 @@ Deno.serve(async (req) => {
   const { data: profileRows } = await admin
     .from('profiles')
     .select(
-      'id, plan_id, subscription_status, subscription_id, payment_customer_id, period_start, period_end',
+      'plan_id, subscription_status, subscription_id, payment_customer_id, period_start, period_end',
     )
     .eq('user_id', userId)
     .maybeSingle();

@@ -124,6 +124,11 @@ function edgeFunctionUrl(name: string): string {
 export async function fetchMyUsage(): Promise<UsageSnapshot> {
   try {
     const client = supabaseOrThrow();
+    const { data: session } = await client.auth.getSession();
+    if (!session.session) {
+      // No session: the RPC is revoked from anon, so calling it would 401.
+      return NO_USAGE;
+    }
     const { data, error } = await client.rpc('paqt_my_usage');
     if (error) {
       console.debug('[paqt] paqt_my_usage failed:', error.message);
@@ -145,6 +150,8 @@ export interface RazorpayCheckout {
   subscriptionId: string;
   name: string | null;
   email: string | null;
+  /** True when the checkout renewed/upgraded an existing subscription (no payment modal). */
+  switched?: boolean;
 }
 
 export type CheckoutOutcome = 'completed' | 'dismissed';
@@ -209,6 +216,15 @@ async function callBillingEdge(name: string, body?: unknown): Promise<Record<str
 /** Creates a Razorpay subscription and returns the payload needed to open Checkout. */
 export async function beginCheckout(planId: string): Promise<RazorpayCheckout> {
   const body = await callBillingEdge('create-checkout-session', { plan_id: planId });
+  if (body.switched === true) {
+    return {
+      key: typeof body.key_id === 'string' ? body.key_id : '',
+      subscriptionId: typeof body.subscription_id === 'string' ? body.subscription_id : '',
+      name: typeof body.name === 'string' ? body.name : null,
+      email: typeof body.email === 'string' ? body.email : null,
+      switched: true,
+    };
+  }
   if (typeof body.key_id !== 'string' || typeof body.subscription_id !== 'string') {
     throw {
       code: 'checkout_failed',
@@ -261,6 +277,9 @@ function loadRazorpayScript(): Promise<void> {
 export async function openRazorpayCheckout(
   checkout: RazorpayCheckout,
 ): Promise<CheckoutOutcome> {
+  if (checkout.switched) {
+    return 'completed';
+  }
   await loadRazorpayScript();
   const Checkout = window.Razorpay;
   if (!Checkout) {
