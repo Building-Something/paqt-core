@@ -266,7 +266,10 @@ begin
   if v_profile.user_id is null then
     return jsonb_build_object('allowed', false, 'reason', 'plan_required');
   end if;
-  if v_profile.subscription_status not in ('active', 'trialing') then
+  -- A subscription cancelled at cycle end (status 'canceling') keeps paid
+  -- access until the end of the current billing cycle; the period_end check
+  -- below turns the gate off once that paid window closes.
+  if v_profile.subscription_status not in ('active', 'trialing', 'canceling') then
     return jsonb_build_object('allowed', false, 'reason', v_profile.subscription_status);
   end if;
   if v_profile.plan_id is null then
