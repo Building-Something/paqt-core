@@ -213,9 +213,20 @@ async function callBillingEdge(name: string, body?: unknown): Promise<Record<str
   return parsed;
 }
 
-/** Creates a Razorpay subscription and returns the payload needed to open Checkout. */
-export async function beginCheckout(planId: string): Promise<RazorpayCheckout> {
-  const body = await callBillingEdge('create-checkout-session', { plan_id: planId });
+/**
+ * Creates a Razorpay subscription and returns the payload needed to open Checkout.
+ * Pass `{ paymentMethod: 'new' }` to force a fresh subscription (checkout modal
+ * opens so the customer can use a different card/UPI) instead of renewing the
+ * existing subscription in place.
+ */
+export async function beginCheckout(
+  planId: string,
+  options: { paymentMethod?: 'same' | 'new' } = {},
+): Promise<RazorpayCheckout> {
+  const body = await callBillingEdge('create-checkout-session', {
+    plan_id: planId,
+    ...(options.paymentMethod === 'new' ? { payment_method: 'new' } : {}),
+  });
   if (body.switched === true) {
     return {
       key: typeof body.key_id === 'string' ? body.key_id : '',

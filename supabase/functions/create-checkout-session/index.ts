@@ -82,7 +82,7 @@ Deno.serve(async (req) => {
   }
   const userId = userData.user.id;
 
-  let body: { plan_id?: unknown };
+  let body: { plan_id?: unknown; payment_method?: unknown };
   try {
     body = await req.json();
   } catch {
@@ -92,6 +92,11 @@ Deno.serve(async (req) => {
   if (!planId) {
     return jsonError(400, 'bad_request', 'Missing plan_id.');
   }
+  // 'same' (default): renew an existing subscription in place (no payment).
+  // 'new': always create a fresh subscription so the checkout modal opens and
+  // the customer can choose a different payment method. The old subscription
+  // keeps running until the end of its already-paid cycle, then stops.
+  const paymentMethod = body.payment_method === 'new' ? 'new' : 'same';
 
   const { data: planRows, error: planError } = await admin
     .from('plans')
@@ -153,6 +158,60 @@ Deno.serve(async (req) => {
     // The profile's stored subscription_id may trail the live one (e.g. after an
     // interrupted upgrade), so the cancel state is the source of truth.
     if (active?.id && profile?.subscription_status === 'canceling') {
+      // "Renew with a new payment method": do not touch the existing sub in
+      // place — Razorpay cannot swap the payment method on a live subscription.
+      // Create a fresh subscription (the checkout modal opens so the customer
+      // can pick a new card/UPI) and schedule the old sub to stop at the end of
+      // its already-paid cycle so access is continuous without double billing.
+      if (paymentMethod === 'new') {
+        try {
+          const subscription = await razorpay.subscriptions.create({
+            plan_id: plan.price_id,
+            total_count: 12,
+            customer_id: customerId,
+            customer_notify: 1,
+            notes: { user_id: userId, plan_id: plan.id },
+          });
+          await razorpay.subscriptions.cancel(active.id, { cancel_at_cycle_end: 1 });
+
+          await admin
+            .from('profiles')
+            .upsert(
+              {
+                user_id: userId,
+                payment_customer_id: customerId,
+                subscription_id: subscription.id,
+                updated_at: Date.now(),
+              },
+              { onConflict: 'user_id' },
+            );
+
+          return new Response(
+            JSON.stringify({
+              key_id: KEY_ID,
+              subscription_id: subscription.id,
+              name,
+              email,
+            }),
+            { headers: { 'Content-Type': 'application/json', ...corsHeaders() } },
+          );
+        } catch (err) {
+          const detail =
+            (err as { error?: { description?: string } })?.error?.description ??
+            (err as Error)?.message ??
+            'unknown error';
+          console.error(
+            '[create-checkout-session] renew with new payment method failed:',
+            detail,
+          );
+          return jsonError(
+            502,
+            'razorpay_error',
+            `Razorpay could not start the new subscription: ${detail}`,
+          );
+        }
+      }
+
       try {
         const current = await razorpay.subscriptions.fetch(active.id);
         const liveStatus = (current as { status?: string }).status ?? active.status;

@@ -167,10 +167,10 @@ export function PlanUsageCard({ compact = false }: { compact?: boolean }) {
   const active = isPlanActive(usage);
   const canceling = isPlanCanceling(usage);
 
-  async function handleCheckout(planId: string) {
+  async function handleCheckout(planId: string, paymentMethod: 'same' | 'new' = 'same') {
     setBusy(planId);
     try {
-      const checkout = await beginCheckout(planId);
+      const checkout = await beginCheckout(planId, { paymentMethod });
       const outcome = await openRazorpayCheckout(checkout);
       if (outcome === 'completed') {
         window.location.assign('/settings?checkout=success');
@@ -305,23 +305,26 @@ export function PlanUsageCard({ compact = false }: { compact?: boolean }) {
         <div className="mt-4">
           {canceling ? (
             <p className="mb-2 text-xs leading-relaxed text-muted-foreground">
-              Your current plan stays active until it ends — pick a plan to continue on, extend,
-              or upgrade.
+              Your current plan stays active until it ends — renew to keep it going or pick a
+              different plan.
             </p>
           ) : null}
           <div className="flex flex-wrap items-center gap-2">
-            {PLANS.map((plan) => (
-              <Button
-                key={plan.id}
-                size="sm"
-                disabled={busy === plan.id}
-                onClick={() => void handleCheckout(plan.id)}
-              >
-                {busy === plan.id ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : null}
-                {usage.planId === plan.id ? 'Renew' : plan.name} · ₹{plan.price.toLocaleString('en-IN')}
-                <ArrowUpRight className="size-3.5" aria-hidden="true" />
-              </Button>
-            ))}
+            {PLANS.map((plan) => {
+              const samePlan = usage.planId === plan.id;
+              return (
+                <Button
+                  key={plan.id}
+                  size="sm"
+                  disabled={busy === plan.id}
+                  onClick={() => void handleCheckout(plan.id, samePlan ? 'new' : 'same')}
+                >
+                  {busy === plan.id ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : null}
+                  {samePlan ? 'Renew' : plan.name} · ₹{plan.price.toLocaleString('en-IN')}
+                  <ArrowUpRight className="size-3.5" aria-hidden="true" />
+                </Button>
+              );
+            })}
             <Button asChild size="sm" variant="outline">
               <Link to="/pricing">Compare plans</Link>
             </Button>

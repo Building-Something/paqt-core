@@ -229,6 +229,41 @@ async function applyEndOfSubscription(
     return true;
   }
 
+  // A terminal event for a superseded subscription must not clobber the
+  // profile. During renew/upgrade a fresh subscription replaces the old one
+  // (which is then cancelled at the end of its already-paid cycle); when that
+  // old sub's cancelled event finally arrives, the profile is already pointing
+  // at the newer sub and downgrading it here would wipe the renewal.
+  const profileId = subscription.id ?? '';
+  const profileCheck = customerId
+    ? await admin
+        .from('profiles')
+        .select('subscription_id')
+        .eq('payment_customer_id', customerId)
+        .maybeSingle()
+    : null;
+  const currentSubId =
+    profileCheck?.data?.subscription_id ??
+    (notesUserId
+      ? (
+          await admin
+            .from('profiles')
+            .select('subscription_id')
+            .eq('user_id', notesUserId)
+            .maybeSingle()
+        )?.data?.subscription_id
+      : null);
+  if (
+    currentSubId &&
+    profileId &&
+    currentSubId !== profileId
+  ) {
+    console.info(
+      `[razorpay-webhook] ignoring ${reason} event for superseded subscription ${profileId} (profile is on ${currentSubId})`,
+    );
+    return true;
+  }
+
   // Residual access runs until the end of the CURRENT billing cycle. On a
   // cancel/stop at cycle end, Razorpay leaves `end_at` as the full term end
   // (e.g. 12 months out) while `current_end` is the boundary the customer
