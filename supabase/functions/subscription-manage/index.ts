@@ -27,7 +27,9 @@ Deno.serve(async (req) => {
 
   const { data: profileRows } = await admin
     .from('profiles')
-    .select('id, plan_id, subscription_status, subscription_id, period_start, period_end')
+    .select(
+      'id, plan_id, subscription_status, subscription_id, payment_customer_id, period_start, period_end',
+    )
     .eq('user_id', userId)
     .maybeSingle();
 
@@ -36,6 +38,7 @@ Deno.serve(async (req) => {
         plan_id: string | null;
         subscription_status: string;
         subscription_id: string | null;
+        payment_customer_id: string | null;
         period_start: number | null;
         period_end: number | null;
       }
@@ -50,7 +53,27 @@ Deno.serve(async (req) => {
   const action = body.action === 'cancel' ? 'cancel' : 'status';
 
   if (action === 'cancel') {
-    const subscriptionId = profile?.subscription_id;
+    let subscriptionId = profile?.subscription_id ?? null;
+    if (!subscriptionId && profile?.payment_customer_id) {
+      // The stored subscription id may not be mirrored yet (webhook lag). Look
+      // up the live subscription from Razorpay so cancellation never spuriously
+      // fails with no_subscription while a subscription actually exists.
+      try {
+        const response = await razorpay.subscriptions.all({
+          customer_id: profile.payment_customer_id,
+        });
+        const items = (response.items as Array<{ id: string; status?: string }>) ?? [];
+        const live = items.find((item) =>
+          ['active', 'authenticated'].includes(item.status ?? ''),
+        );
+        subscriptionId = live?.id ?? null;
+      } catch (err) {
+        console.error(
+          '[subscription-manage] could not look up subscriptions for customer:',
+          (err as Error)?.message,
+        );
+      }
+    }
     if (!subscriptionId) {
       return jsonError(409, 'no_subscription', 'You have no active subscription.');
     }
@@ -67,13 +90,33 @@ Deno.serve(async (req) => {
       console.error('[subscription-manage] razorpay cancel failed:', detail);
       return jsonError(502, 'razorpay_error', `Razorpay could not cancel the subscription: ${detail}`);
     }
+
+    // Residual access runs until the end of the CURRENT billing cycle. On a
+    // cancel at cycle end Razorpay keeps `end_at` as the full term end while
+    // `current_end` is the paid-through boundary, so use current_end.
+    const periodEndSec = (subscription as { current_end?: number }).current_end ?? null;
+    const periodEndMs =
+      typeof periodEndSec === 'number' && periodEndSec > 0 ? Number(ms(periodEndSec)) : null;
+
+    // Mirror the scheduled cancellation so the UI can switch from "Cancel" to
+    // plan options right away, without waiting for the subscription.cancelled
+    // webhook to land.
+    await admin
+      .from('profiles')
+      .update({
+        subscription_status: 'canceling',
+        period_end: periodEndMs,
+        updated_at: Date.now(),
+      })
+      .eq('user_id', userId);
+
     return new Response(
       JSON.stringify({
         has_subscription: true,
         subscription_id: subscriptionId,
         status: profile?.subscription_status ?? 'none',
         plan_id: profile?.plan_id ?? null,
-        period_end: ms((subscription as { end_at?: number }).end_at ?? null),
+        period_end: periodEndMs,
         cancels_at_period_end: true,
       }),
       { headers: { 'Content-Type': 'application/json', ...corsHeaders() } },

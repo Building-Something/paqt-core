@@ -131,6 +131,21 @@ Deno.serve(async (req) => {
       customer_notify: 1,
       notes: { user_id: userId, plan_id: plan.id },
     });
+
+    // Persist the subscription id right away (not just via the delayed
+    // subscription.activated webhook) so cancel/manage always has a handle,
+    // and so billing shows the started subscription to this customer.
+    await admin
+      .from('profiles')
+      .upsert(
+        {
+          user_id: userId,
+          payment_customer_id: customerId,
+          subscription_id: subscription.id,
+          updated_at: Date.now(),
+        },
+        { onConflict: 'user_id' },
+      );
   } catch (err) {
     const detail =
       (err as { error?: { description?: string } })?.error?.description ??

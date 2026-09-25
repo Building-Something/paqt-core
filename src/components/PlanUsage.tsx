@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Loader2, ScanSearch, FilePenLine, ArrowUpRight, Coins } from 'lucide-react';
+import { Loader2, ScanSearch, FilePenLine, ArrowUpRight, Coins, X } from 'lucide-react';
 import { useEntitlement } from '../contexts/EntitlementContext';
 import { useUpgrade } from './UpgradeDialog';
 import { useToast } from '../contexts/ToastContext';
@@ -11,6 +11,7 @@ import {
   PLANS,
   canRun,
   isPlanActive,
+  isPlanCanceling,
   type CheckoutError,
 } from '../services/entitlementService';
 import { Button } from './ui/button';
@@ -160,6 +161,7 @@ export function PlanUsageCard({ compact = false }: { compact?: boolean }) {
   const [busy, setBusy] = useState<string | null>(null);
 
   const active = isPlanActive(usage);
+  const canceling = isPlanCanceling(usage);
 
   async function handleCheckout(planId: string) {
     setBusy(planId);
@@ -178,17 +180,11 @@ export function PlanUsageCard({ compact = false }: { compact?: boolean }) {
     }
   }
 
-  async function handleCancel() {
-    if (
-      !window.confirm(
-        'Cancel your subscription? Your plan stays active until the end of the current month.',
-      )
-    ) {
-      return;
-    }
+  async function handleCancelConfirm() {
     setBusy('cancel');
     try {
       const info = await cancelSubscription();
+      setConfirmCancelOpen(false);
       toast(
         'info',
         info.periodEnd
@@ -205,26 +201,38 @@ export function PlanUsageCard({ compact = false }: { compact?: boolean }) {
     }
   }
 
+  const [confirmCancelOpen, setConfirmCancelOpen] = useState(false);
+
   return (
-    <Card className="p-5">
+    <>
+      <Card className="p-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-sm font-semibold text-foreground">Plan &amp; billing</h2>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            {active
-              ? `${usage.planName ?? 'Active plan'}${
-                  usage.periodEnd
-                    ? ` · resets ${new Date(usage.periodEnd).toLocaleDateString(undefined, {
-                        day: 'numeric',
-                        month: 'short',
-                      })}`
-                    : ' · resets every month'
-                }`
-              : 'Subscribe to unlock analyses and drafts'}
+            {canceling
+              ? `${usage.planName ?? 'Your plan'} cancelled · stays active until ${new Date(
+                  usage.periodEnd ?? Date.now(),
+                ).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}`
+              : active
+                ? `${usage.planName ?? 'Active plan'}${
+                    usage.periodEnd
+                      ? ` · resets ${new Date(usage.periodEnd).toLocaleDateString(undefined, {
+                          day: 'numeric',
+                          month: 'short',
+                        })}`
+                      : ' · resets every month'
+                  }`
+                : 'Subscribe to unlock analyses and drafts'}
           </p>
         </div>
-        {usage.signedIn && active && usage.planId !== 'business' ? (
-          <Button variant="outline" size="sm" disabled={busy === 'cancel'} onClick={() => void handleCancel()}>
+        {usage.signedIn && active && !canceling && usage.planId !== 'business' ? (
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={busy === 'cancel'}
+            onClick={() => setConfirmCancelOpen(true)}
+          >
             {busy === 'cancel' ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : null}
             Cancel subscription
           </Button>
@@ -289,32 +297,42 @@ export function PlanUsageCard({ compact = false }: { compact?: boolean }) {
         </p>
       )}
 
-      {!active ? (
-        <div className="mt-4 flex flex-wrap items-center gap-2">
-          {PLANS.map((plan) => (
-            <Button
-              key={plan.id}
-              size="sm"
-              disabled={busy === plan.id}
-              onClick={() => void handleCheckout(plan.id)}
-            >
-              {busy === plan.id ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : null}
-              {plan.name} · ₹{plan.price.toLocaleString('en-IN')}
-              <ArrowUpRight className="size-3.5" aria-hidden="true" />
+      {!active || canceling ? (
+        <div className="mt-4">
+          {canceling ? (
+            <p className="mb-2 text-xs leading-relaxed text-muted-foreground">
+              Your current plan stays active until it ends — pick a plan to continue on, extend,
+              or upgrade.
+            </p>
+          ) : null}
+          <div className="flex flex-wrap items-center gap-2">
+            {PLANS.map((plan) => (
+              <Button
+                key={plan.id}
+                size="sm"
+                disabled={busy === plan.id}
+                onClick={() => void handleCheckout(plan.id)}
+              >
+                {busy === plan.id ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : null}
+                {usage.planId === plan.id ? 'Renew' : plan.name} · ₹{plan.price.toLocaleString('en-IN')}
+                <ArrowUpRight className="size-3.5" aria-hidden="true" />
+              </Button>
+            ))}
+            <Button asChild size="sm" variant="outline">
+              <Link to="/pricing">Compare plans</Link>
             </Button>
-          ))}
-          <Button asChild size="sm" variant="outline">
-            <Link to="/pricing">Compare plans</Link>
-          </Button>
+          </div>
         </div>
       ) : null}
 
       {!compact ? (
         <div className="mt-4 flex items-center justify-between gap-3 border-t border-border pt-3">
           <p className="text-xs text-muted-foreground">
-            {usage.periodEnd
-              ? `Resets ${new Date(usage.periodEnd).toLocaleDateString()}.`
-              : 'Resets monthly.'}{' '}
+            {canceling
+              ? `Access until ${usage.periodEnd ? new Date(usage.periodEnd).toLocaleDateString() : 'the end of this month'}.`
+              : usage.periodEnd
+                ? `Resets ${new Date(usage.periodEnd).toLocaleDateString()}.`
+                : 'Resets monthly.'}{' '}
             Chat and draft revisions are always unlimited.
           </p>
           <button
@@ -327,5 +345,56 @@ export function PlanUsageCard({ compact = false }: { compact?: boolean }) {
         </div>
       ) : null}
     </Card>
+
+    {confirmCancelOpen ? (
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="cancel-plan-title"
+      >
+        <div className="w-full max-w-md rounded-xl border border-border bg-background shadow-xl">
+          <div className="flex items-start justify-between gap-4 px-6 py-5">
+            <div>
+              <h2 id="cancel-plan-title" className="text-lg font-semibold tracking-tight text-foreground">
+                Cancel your subscription?
+              </h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Your plan stays active until the end of the current month.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setConfirmCancelOpen(false)}
+              aria-label="Close"
+              disabled={busy === 'cancel'}
+              className="rounded-md p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
+            >
+              <X className="size-4" aria-hidden="true" />
+            </button>
+          </div>
+          <div className="flex flex-wrap justify-end gap-2 border-t border-border px-6 py-4">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy === 'cancel'}
+              onClick={() => setConfirmCancelOpen(false)}
+            >
+              Keep my plan
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              disabled={busy === 'cancel'}
+              onClick={() => void handleCancelConfirm()}
+            >
+              {busy === 'cancel' ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : null}
+              Cancel subscription
+            </Button>
+          </div>
+        </div>
+      </div>
+    ) : null}
+    </>
   );
 }

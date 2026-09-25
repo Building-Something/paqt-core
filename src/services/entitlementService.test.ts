@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   normalizeUsage,
   isPlanActive,
+  isPlanCanceling,
   canRun,
   upgradeMessage,
   NO_USAGE,
@@ -9,13 +10,14 @@ import {
 } from './entitlementService';
 
 function activePlan(overrides: Partial<UsageSnapshot> = {}): UsageSnapshot {
+  const now = Date.now();
   return {
     signedIn: true,
     status: 'active',
     planId: 'individual',
     planName: 'Individual',
-    periodStart: 1700000000,
-    periodEnd: 1700000000 + 30 * 24 * 3600,
+    periodStart: now,
+    periodEnd: now + 30 * 24 * 3600 * 1000,
     analysis: { used: 3, quota: 5, remaining: 2 },
     draft: { used: 0, quota: 5, remaining: 5 },
     credits: null,
@@ -72,13 +74,29 @@ describe('normalizeUsage', () => {
 });
 
 describe('isPlanActive', () => {
-  it('accepts active and trialing subscriptions only', () => {
+  it('accepts active, trialing, and canceling subscriptions only', () => {
     expect(isPlanActive(activePlan())).toBe(true);
     expect(isPlanActive(activePlan({ status: 'trialing' }))).toBe(true);
+    expect(isPlanActive(activePlan({ status: 'canceling' }))).toBe(true);
     expect(isPlanActive(activePlan({ status: 'past_due' }))).toBe(false);
+    expect(isPlanActive(activePlan({ status: 'canceled' }))).toBe(false);
     expect(isPlanActive(activePlan({ status: 'none' }))).toBe(false);
     expect(isPlanActive(NO_USAGE)).toBe(false);
     expect(isPlanActive(activePlan({ signedIn: false }))).toBe(false);
+    expect(isPlanActive(activePlan({ status: 'canceling', signedIn: false }))).toBe(false);
+  });
+
+  it('expires plans once the period end passes', () => {
+    expect(isPlanActive(activePlan({ periodEnd: Date.now() - 1000 }))).toBe(false);
+    expect(isPlanActive(activePlan({ status: 'canceling', periodEnd: Date.now() - 1000 }))).toBe(false);
+  });
+});
+
+describe('isPlanCanceling', () => {
+  it('is true only for signed-in canceling plans', () => {
+    expect(isPlanCanceling(activePlan({ status: 'canceling' }))).toBe(true);
+    expect(isPlanCanceling(activePlan())).toBe(false);
+    expect(isPlanCanceling(activePlan({ status: 'canceling', signedIn: false }))).toBe(false);
   });
 });
 

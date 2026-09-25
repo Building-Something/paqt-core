@@ -74,7 +74,21 @@ export function normalizeUsage(raw: unknown): UsageSnapshot {
 
 /** True when the account holds an active (billed) subscription. */
 export function isPlanActive(usage: UsageSnapshot): boolean {
-  return usage.signedIn && (usage.status === 'active' || usage.status === 'trialing');
+  if (!usage.signedIn) {
+    return false;
+  }
+  if (usage.status !== 'active' && usage.status !== 'trialing' && usage.status !== 'canceling') {
+    return false;
+  }
+  if (usage.periodEnd != null && usage.periodEnd > 0 && Date.now() > usage.periodEnd) {
+    return false;
+  }
+  return true;
+}
+
+/** True when the plan is active but scheduled to cancel at the end of the period. */
+export function isPlanCanceling(usage: UsageSnapshot): boolean {
+  return usage.signedIn && usage.status === 'canceling';
 }
 
 /** True when the given metered operation can start right now. */

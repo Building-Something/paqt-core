@@ -467,7 +467,7 @@ begin
   if v_profile.user_id is null then
     return jsonb_build_object('active', false);
   end if;
-  if v_profile.subscription_status not in ('active', 'trialing') then
+  if v_profile.subscription_status not in ('active', 'trialing', 'canceling') then
     return jsonb_build_object('active', false, 'status', v_profile.subscription_status);
   end if;
   if v_profile.period_end is not null and v_now > v_profile.period_end then

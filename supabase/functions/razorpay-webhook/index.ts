@@ -58,14 +58,17 @@ async function claimEvent(
   try {
     const { data: inserted } = await admin
       .from('webhook_events')
-      .insert({
-        event_id: eventId,
-        event_type: typeof event.event === 'string' ? event.event : '',
-        received_at: Date.now(),
-      })
-      .onConflict('event_id')
+      .upsert(
+        {
+          event_id: eventId,
+          event_type: typeof event.event === 'string' ? event.event : '',
+          received_at: Date.now(),
+        },
+        { onConflict: 'event_id', ignoreDuplicates: true },
+      )
       .select('event_id');
-    // No row returned => a prior delivery already claimed this event.
+    // Upsert with ignoreDuplicates returns no rows on a duplicate, so a prior
+    // delivery has already claimed this event.
     return Array.isArray(inserted) && inserted.length > 0;
   } catch (err) {
     // webhook_events may not exist yet (migration not applied); do not fail
@@ -96,8 +99,7 @@ async function isEventFresh(
         .select('last_webhook_event_at')
         .eq('payment_customer_id', customerId)
         .maybeSingle();
-      const last = (data as { last_webhook_event_at: number | null } | null)
-        ?.last_webhook_event_at;
+      const last = data?.last_webhook_event_at;
       if (last != null && Number(last) >= eventCreatedMs) {
         return false;
       }
@@ -108,8 +110,7 @@ async function isEventFresh(
         .select('last_webhook_event_at')
         .eq('user_id', userId)
         .maybeSingle();
-      const last = (data as { last_webhook_event_at: number | null } | null)
-        ?.last_webhook_event_at;
+      const last = data?.last_webhook_event_at;
       if (last != null && Number(last) >= eventCreatedMs) {
         return false;
       }
@@ -155,11 +156,12 @@ async function applySubscriptionProfile(
   };
 
   if (customerId) {
-    const { error, count } = await admin
+    const updated = await admin
       .from('profiles')
       .update(profile)
-      .eq('payment_customer_id', customerId);
-    if (!error && (count ?? 0) > 0) {
+      .eq('payment_customer_id', customerId)
+      .select('user_id');
+    if (!updated.error && (updated.data?.length ?? 0) > 0) {
       return true;
     }
   }
@@ -188,13 +190,16 @@ async function applySubscriptionProfile(
  * Handles terminal events (cancelled / completed / halted / paused).
  *
  * A subscription cancelled at the end of the billing cycle still carries a
- * future `end_at` — the customer paid for that period and must keep access
- * until it ends, so we keep the plan active and just pin `period_end` (access
- * then expires naturally). Everything else clears the profile immediately.
+ * future cycle — the customer paid for that period and must keep access until
+ * it ends, so we keep the plan active and just pin `period_end` (access then
+ * expires naturally). Such a cancelling profile keeps `subscription_status =
+ * 'canceling'` so the UI can hide "Cancel subscription" and offer plan options
+ * instead. Everything else clears the profile immediately.
  */
 async function applyEndOfSubscription(
   subscription: RazorpaySubscription,
   eventCreatedMs: number | null,
+  reason: 'cancelled' | 'completed' | 'halted' | 'paused',
 ): Promise<boolean> {
   const admin = createAdmin();
   const customerId = subscription.customer_id ?? '';
@@ -204,26 +209,32 @@ async function applyEndOfSubscription(
     return true;
   }
 
-  const endAtSec = subscription.end_at;
-  const endAtMs = typeof endAtSec === 'number' && endAtSec > 0 ? Number(ms(endAtSec)) : null;
-  const keepsAccess = endAtMs != null && endAtMs > Date.now() + 60_000;
+  // Residual access runs until the end of the CURRENT billing cycle. On a
+  // cancel/stop at cycle end, Razorpay leaves `end_at` as the full term end
+  // (e.g. 12 months out) while `current_end` is the boundary the customer
+  // actually paid through, so current_end is the source of truth here.
+  const periodEndSec = subscription.current_end ?? subscription.end_at;
+  const periodEndMs =
+    typeof periodEndSec === 'number' && periodEndSec > 0 ? Number(ms(periodEndSec)) : null;
+  const keepsAccess = periodEndMs != null && periodEndMs > Date.now() + 60_000;
 
   const now = Date.now();
   const base = { last_webhook_event_at: eventCreatedMs, updated_at: now };
 
   if (keepsAccess) {
     const profile = {
-      subscription_status: 'active',
+      subscription_status: reason === 'cancelled' ? 'canceling' : 'active',
       subscription_id: subscription.id,
-      period_end: endAtMs,
+      period_end: periodEndMs,
       ...base,
     };
     if (customerId) {
-      const { error, count } = await admin
+      const updated = await admin
         .from('profiles')
         .update(profile)
-        .eq('payment_customer_id', customerId);
-      if (!error && (count ?? 0) > 0) {
+        .eq('payment_customer_id', customerId)
+        .select('user_id');
+      if (!updated.error && (updated.data?.length ?? 0) > 0) {
         return true;
       }
     }
@@ -246,11 +257,12 @@ async function applyEndOfSubscription(
   };
 
   if (customerId) {
-    const { error, count } = await admin
+    const updated = await admin
       .from('profiles')
       .update(clear)
-      .eq('payment_customer_id', customerId);
-    if (!error && (count ?? 0) > 0) {
+      .eq('payment_customer_id', customerId)
+      .select('user_id');
+    if (!updated.error && (updated.data?.length ?? 0) > 0) {
       return true;
     }
   }
@@ -276,7 +288,7 @@ async function applyPaymentFailed(payment: RazorpayPayment, eventCreatedMs: numb
   if (!customerId || !(await isEventFresh(admin, eventCreatedMs, customerId, ''))) {
     return true;
   }
-  const { error, count } = await admin
+  const updated = await admin
     .from('profiles')
     .update({
       subscription_status: 'past_due',
@@ -284,8 +296,9 @@ async function applyPaymentFailed(payment: RazorpayPayment, eventCreatedMs: numb
       last_webhook_event_at: eventCreatedMs,
       updated_at: Date.now(),
     })
-    .eq('payment_customer_id', customerId);
-  if (error || (count ?? 0) === 0) {
+    .eq('payment_customer_id', customerId)
+    .select('user_id');
+  if (updated.error || (updated.data?.length ?? 0) === 0) {
     console.error('[razorpay-webhook] payment.failed could not mark past_due for', customerId);
     return false;
   }
@@ -378,10 +391,24 @@ Deno.serve(async (req) => {
         break;
       }
       case 'subscription.completed':
-      case 'subscription.cancelled':
       case 'subscription.halted':
       case 'subscription.paused': {
-        const ok = await applyEndOfSubscription(entity, createdMs);
+        const ok = await applyEndOfSubscription(
+          entity,
+          createdMs,
+          type === 'subscription.completed'
+            ? 'completed'
+            : type === 'subscription.halted'
+              ? 'halted'
+              : 'paused',
+        );
+        if (!ok) {
+          return jsonError(500, 'db_write_failed', 'Failed to clear the subscription profile.');
+        }
+        break;
+      }
+      case 'subscription.cancelled': {
+        const ok = await applyEndOfSubscription(entity, createdMs, 'cancelled');
         if (!ok) {
           return jsonError(500, 'db_write_failed', 'Failed to clear the subscription profile.');
         }
