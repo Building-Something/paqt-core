@@ -81,12 +81,18 @@ export async function getOrCreateCustomer(admin, userId, email, name) {
       }).eq('user_id', userId);
     }
   }
+  // If a customer with the same email already exists on the merchant (for
+  // example when the user deleted their Paqt account and re-registered, which
+  // cascade-deletes the profile row but not the Razorpay customer), a plain
+  // create fails with "Customer already exists for the merchant". With
+  // fail_existing: '0' Razorpay returns that existing customer instead.
   const customer = await razorpay.customers.create({
     name: name || email.split('@')[0] || 'Paqt user',
     email: email || undefined,
     notes: {
       user_id: userId
-    }
+    },
+    fail_existing: '0'
   });
   await admin.from('profiles').upsert({
     user_id: userId,

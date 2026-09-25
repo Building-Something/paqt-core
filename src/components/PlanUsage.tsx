@@ -23,8 +23,12 @@ export function useFeatureGate() {
 
   return useCallback(
     (op: 'analysis' | 'draft'): boolean => {
-      if (loading || !isPlanActive(usage)) {
-        return true;
+      if (loading) {
+        return false;
+      }
+      if (!isPlanActive(usage)) {
+        promptUpgrade('plan');
+        return false;
       }
       if (canRun(usage, op)) {
         return true;
