@@ -5,6 +5,7 @@ import {
   jsonError,
   ms,
   razorpay,
+  razorpayCancel,
   razorpayCancelScheduledChanges,
   razorpayChangePlan,
   razorpayResume,
@@ -20,6 +21,7 @@ type SubscriptionEntity = {
   created_at?: number;
   plan_id?: string;
   customer_id?: string;
+  start_at?: number;
 };
 
 /**
@@ -42,13 +44,17 @@ async function listSubscriptions(customerId: string): Promise<SubscriptionEntity
 
 /**
  * Cancels stale "created" subscriptions (abandoned checkouts) older than ten
- * minutes so they stop piling up and emailing payment reminders.
+ * minutes so they stop piling up and emailing payment reminders. Subs whose
+ * start_at is still in the future are deliberately upcoming (start_at set for
+ * a renew/upgrade) and must not be swept up here.
  */
 async function cancelStaleCreated(items: SubscriptionEntity[]): Promise<void> {
   const nowSec = Math.floor(Date.now() / 1000);
   for (const sub of items) {
+    if (sub.status !== 'created') continue;
+    const isUpcoming = typeof sub.start_at === 'number' && sub.start_at > nowSec;
+    if (isUpcoming) continue;
     if (
-      sub.status === 'created' &&
       typeof sub.created_at === 'number' &&
       nowSec - sub.created_at > 10 * 60 &&
       sub.id
@@ -143,9 +149,20 @@ Deno.serve(async (req) => {
     // active-subscription state below.
     await cancelStaleCreated(items);
 
-    const active = items.find(
-      (sub) => sub.status && ACTIVE_SUB_STATUSES.has(sub.status),
-    );
+    // Prefer the subscription the profile already tracks (it is the one the
+    // renew/cancel state refers to); otherwise fall back to the first live
+    // subscription. Picking an arbitrary "active" when several exist can
+    // target the wrong sub for cancel-at-cycle-end and plan switches.
+    const active =
+      items.find(
+        (sub) =>
+          sub.id === profile?.subscription_id &&
+          sub.status &&
+          ACTIVE_SUB_STATUSES.has(sub.status),
+      ) ??
+      items.find(
+        (sub) => sub.status && ACTIVE_SUB_STATUSES.has(sub.status),
+      );
 
     // Renew / upgrade: the profile is in the cancelling state while the live
     // Razorpay subscription may be genuinely active (no pending cancel), paused,
@@ -165,14 +182,42 @@ Deno.serve(async (req) => {
       // its already-paid cycle so access is continuous without double billing.
       if (paymentMethod === 'new') {
         try {
+          const current = await razorpay.subscriptions.fetch(active.id);
+          // The new plan must not swallow the already-paid period of the old
+          // subscription. Razorpay lets us schedule a future start: checkout
+          // only collects a token authorisation now and the first real charge
+          // (plus the new plan's benefits) begins at the old period's end.
+          const currentEndSec =
+            (current as { current_end?: number }).current_end ?? null;
+          const futureStartSec =
+            typeof currentEndSec === 'number' &&
+            currentEndSec > Math.floor(Date.now() / 1000)
+              ? currentEndSec
+              : undefined;
+
           const subscription = await razorpay.subscriptions.create({
             plan_id: plan.price_id,
             total_count: 12,
             customer_id: customerId,
             customer_notify: 1,
+            ...(futureStartSec ? { start_at: futureStartSec } : {}),
             notes: { user_id: userId, plan_id: plan.id },
           });
-          await razorpay.subscriptions.cancel(active.id, { cancel_at_cycle_end: 1 });
+          // Stop the old sub now (not at cycle end — that is silently ignored by
+          // Razorpay and would re-bill the old plan). Residual paid access to
+          // the current period end is preserved by the profile's period_end.
+          try {
+            await razorpayCancel(active.id);
+          } catch (err) {
+            // The old sub could not be stopped: do not leave a pending new sub
+            // behind that would bill the customer while the old one continues.
+            try {
+              await razorpayCancel(subscription.id);
+            } catch {
+              // Best-effort; the untriggered checkout expires it in time.
+            }
+            throw err;
+          }
 
           await admin
             .from('profiles')
@@ -241,16 +286,41 @@ Deno.serve(async (req) => {
               '[create-checkout-session] in-place plan change unsupported, creating a fresh subscription instead:',
               pd,
             );
+            // Preserve the residual paid period: schedule the new plan to start
+            // at the old subscription's current_end. Checkout collects only a
+            // token authorisation now; the first real charge (and the new plan's
+            // benefits) begin at start_at.
+            const currentEndSec =
+              (current as { current_end?: number }).current_end ?? null;
+            const futureStartSec =
+              typeof currentEndSec === 'number' &&
+              currentEndSec > Math.floor(Date.now() / 1000)
+                ? currentEndSec
+                : undefined;
+
             const upgraded = await razorpay.subscriptions.create({
               plan_id: plan.price_id,
               total_count: 12,
               customer_id: customerId,
               customer_notify: 1,
+              ...(futureStartSec ? { start_at: futureStartSec } : {}),
               notes: { user_id: userId, plan_id: plan.id },
             });
-            // Stop the old sub after its already-paid current cycle so the
-            // customer is never double-charged beyond the new plan's first cycle.
-            await razorpay.subscriptions.cancel(active.id, { cancel_at_cycle_end: 1 });
+            // Stop the old sub now (not at cycle end — that is silently ignored
+            // by Razorpay and would re-bill the old plan). Residual paid access
+            // to the current period end is preserved by the profile's period_end.
+            try {
+              await razorpayCancel(active.id);
+            } catch (err) {
+              // The old sub could not be stopped: do not leave a pending new sub
+              // behind that would bill the customer while the old one continues.
+              try {
+                await razorpayCancel(upgraded.id);
+              } catch {
+                // Best-effort; the untriggered checkout expires it in time.
+              }
+              throw err;
+            }
 
             await admin
               .from('profiles')

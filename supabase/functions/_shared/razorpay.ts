@@ -76,6 +76,33 @@ export function jsonOk(extra = {}) {
   }
   return parsed;
 }
+/**
+ * Cancels a subscription IMMEDIATELY and verifies it actually stopped.
+ *
+ * Do NOT use cancel-at-cycle-end: Razorpay silently ignores it in some
+ * configurations (returns 200, sub unchanged, `has_scheduled_changes` still
+ * false, `charge_at` intact) — exactly the double-charge landmine seen in
+ * production. Immediate cancel is reliable, and residual paid access is
+ * preserved by the profile's `period_end`, so nothing is lost.
+ *
+ * Throws if the cancellation did not take (so callers can fail the checkout
+ * rather than risk a future re-bill).
+ */
+export async function razorpayCancel(subscriptionId) {
+  const cancelled = await razorpayApi(`/subscriptions/${subscriptionId}/cancel`, {
+    method: 'POST',
+    body: JSON.stringify({ cancel_at_cycle_end: false })
+  });
+  const refreshed = await razorpayApi(`/subscriptions/${subscriptionId}`);
+  const status = (refreshed as { status?: string }).status ?? '';
+  const chargeAt = (refreshed as { charge_at?: number | null }).charge_at ?? null;
+  if (status !== 'cancelled' || chargeAt != null) {
+    throw new Error(
+      `cancel verification failed for ${subscriptionId}: status=${status ?? 'unknown'}, charge_at=${String(chargeAt)}`
+    );
+  }
+  return cancelled;
+}
 /** Undoes a scheduled cancellation (subscription.cancel at cycle end) so the sub resumes billing. */ export async function razorpayResume(subscriptionId) {
   return razorpayApi(`/subscriptions/${subscriptionId}/resume`, {
     method: 'POST'

@@ -4,6 +4,7 @@ import {
   jsonError,
   ms,
   razorpay,
+  razorpayCancel,
 } from '../_shared/razorpay.ts';
 
 Deno.serve(async (req) => {
@@ -79,9 +80,11 @@ Deno.serve(async (req) => {
     }
     let subscription: Awaited<ReturnType<typeof razorpay.subscriptions.cancel>>;
     try {
-      subscription = await razorpay.subscriptions.cancel(subscriptionId, {
-        cancel_at_cycle_end: true,
-      });
+      // Immediate cancel, THEN residual access is granted from the profile's
+      // period_end. Cancel-at-cycle-end must not be used: Razorpay silently
+      // ignores it (200 with the sub unchanged, charge_at intact) and the sub
+      // keeps re-billing — the recurring-charge landmine.
+      subscription = await razorpayCancel(subscriptionId);
     } catch (err) {
       const detail =
         (err as { error?: { description?: string } })?.error?.description ??
