@@ -136,14 +136,27 @@ Deno.serve(async (req) => {
     // upgrade can recognise the existing subscription instead of 409ing.
     const { data: profileRows } = await admin
       .from('profiles')
-      .select('subscription_status, subscription_id, plan_id')
+      .select('subscription_status, subscription_id, plan_id, period_end')
       .eq('user_id', userId)
       .maybeSingle();
     const profile = profileRows as {
       subscription_status?: string;
       subscription_id?: string | null;
       plan_id?: string | null;
+      period_end?: number | null;
     } | null;
+
+    // Residual paid-through boundary. After an immediate cancel the live
+    // subscription is gone, but the customer has paid access through
+    // period_end — a new plan must start THERE, not today.
+    const profilePeriodEndSec =
+      typeof profile?.period_end === 'number' && profile.period_end > 0
+        ? Math.floor(profile.period_end / 1000)
+        : null;
+    const hasResidual =
+      profile?.subscription_status === 'canceling' &&
+      profilePeriodEndSec != null &&
+      profilePeriodEndSec > Math.floor(Date.now() / 1000);
 
     // Clean abandoned (unpaid) checkout subscriptions regardless of the
     // active-subscription state below.
@@ -174,7 +187,7 @@ Deno.serve(async (req) => {
     // reject updates, so we fall back to a fresh subscription.
     // The profile's stored subscription_id may trail the live one (e.g. after an
     // interrupted upgrade), so the cancel state is the source of truth.
-    if (active?.id && profile?.subscription_status === 'canceling') {
+    if (active?.id && hasResidual) {
       // "Renew with a new payment method": do not touch the existing sub in
       // place — Razorpay cannot swap the payment method on a live subscription.
       // Create a fresh subscription (the checkout modal opens so the customer
@@ -386,6 +399,51 @@ Deno.serve(async (req) => {
           `Razorpay could not renew your subscription: ${detail}`,
         );
       }
+    }
+
+    // Residual access without a live subscription: the customer cancelled and
+    // the old sub was immediately (and correctly) cancelled, so there is no
+    // live sub to renew in place — but they paid through `period_end`. A new
+    // plan must start exactly there, not today, or it would swallow the paid
+    // period (e.g. Pro dropping to Individual limits early). Leave the
+    // profile's plan/status/period untouched so the old plan's paid access
+    // survives until period_end; the activation webhook flips it later.
+    if (hasResidual) {
+      const futureStartSec =
+        profilePeriodEndSec! > Math.floor(Date.now() / 1000)
+          ? profilePeriodEndSec
+          : undefined;
+
+      const subscription = await razorpay.subscriptions.create({
+        plan_id: plan.price_id,
+        total_count: 12,
+        customer_id: customerId,
+        customer_notify: 1,
+        ...(futureStartSec ? { start_at: futureStartSec } : {}),
+        notes: { user_id: userId, plan_id: plan.id },
+      });
+
+      await admin
+        .from('profiles')
+        .upsert(
+          {
+            user_id: userId,
+            payment_customer_id: customerId,
+            subscription_id: subscription.id,
+            updated_at: Date.now(),
+          },
+          { onConflict: 'user_id' },
+        );
+
+      return new Response(
+        JSON.stringify({
+          key_id: KEY_ID,
+          subscription_id: subscription.id,
+          name,
+          email,
+        }),
+        { headers: { 'Content-Type': 'application/json', ...corsHeaders() } },
+      );
     }
 
     // A genuinely active subscription (not scheduled to cancel) blocks a new
