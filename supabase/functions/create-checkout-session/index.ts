@@ -13,6 +13,10 @@ import {
 
 const KEY_ID = Deno.env.get('RAZORPAY_KEY_ID') ?? '';
 
+/** A crashed/aborted checkout must not lock the user out forever; claims older
+ * than this (ms) can be re-taken by the next checkout attempt. */
+const STALE_CLAIM_MS = 10 * 60 * 1000;
+
 const ACTIVE_SUB_STATUSES = new Set(['authenticated', 'active']);
 
 /** Persists the new subscription on the profile; throws on DB failure so the
@@ -50,28 +54,44 @@ type SubscriptionEntity = {
 
 /**
  * Lists a customer's subscriptions. Razorpay's list endpoint has no customer
- * filter, so we list recent subscriptions and filter client-side. Returns an
- * empty list on any failure so checkout never fails over a listing hiccup.
+ * filter, so we list recent subscriptions and filter client-side. The
+ * subscription the profile currently tracks is fetched by id separately — it
+ * is the authoritative anchor and must be found no matter how many older
+ * (mostly cancelled) subscriptions preceded it, so a churn-heavy customer is
+ * never missed by a pagination limit. Pagination uses the documented `skip`
+ * cursor (the list API only accepts `skip`/`count`; `from`/`to` are Unix
+ * timestamps and there is no id cursor). Returns an empty list on any failure
+ * so checkout never fails over a listing hiccup.
  */
-async function listSubscriptions(customerId: string): Promise<SubscriptionEntity[]> {
+async function listSubscriptions(
+  customerId: string,
+  trackedId?: string | null,
+): Promise<SubscriptionEntity[]> {
   try {
-    // Fetch the two most recent pages so a customer with >100 (mostly
-    // cancelled) subscriptions still yields their live ones; Razorpay's list
-    // endpoint has no customer filter.
-    const first = await razorpay.subscriptions.all({ count: 100 });
-    let items = ((first.items as SubscriptionEntity[]) ?? []).filter(
-      (sub) => sub.customer_id === customerId,
-    );
-    if (((first as { items?: unknown[] }).items?.length ?? 0) >= 100) {
-      const lastId = ((first.items as SubscriptionEntity[]) ?? [])[99]?.id;
-      const second = await razorpay.subscriptions.all({ count: 100, from: lastId ?? '' });
-      items = items.concat(
-        (((second.items as SubscriptionEntity[]) ?? []).filter(
-          (sub) => sub.customer_id === customerId && sub.id !== lastId,
-        )),
-      );
+    const seen = new Map<string, SubscriptionEntity>();
+    const add = (sub?: SubscriptionEntity | null): void => {
+      if (sub && sub.id && sub.customer_id === customerId) {
+        seen.set(sub.id, sub);
+      }
+    };
+
+    if (trackedId) {
+      try {
+        add(await razorpay.subscriptions.fetch(trackedId));
+      } catch {
+        // The tracked sub may no longer exist on Razorpay (e.g. an interrupted
+        // upgrade left a stale id); the list below still covers it if present.
+      }
     }
-    return items;
+
+    for (let skip = 0; skip < 500; skip += 100) {
+      const page = await razorpay.subscriptions.all({ count: 100, skip });
+      const pageItems = (page.items as SubscriptionEntity[]) ?? [];
+      for (const sub of pageItems) add(sub);
+      if (pageItems.length < 100) break;
+    }
+
+    return Array.from(seen.values());
   } catch (err) {
     const detail = (err as Error)?.message ?? 'unknown error';
     console.error('[create-checkout-session] could not list subscriptions:', detail);
@@ -165,12 +185,13 @@ Deno.serve(async (req) => {
   const email = userData.user.email ?? '';
 
   let customerId: string;
+  let claimedCheckout = false;
   try {
     customerId = await getOrCreateCustomer(admin, userId, email, name);
-    const items = await listSubscriptions(customerId);
 
     // Track which subscription id the profile currently points at so renew and
-    // upgrade can recognise the existing subscription instead of 409ing.
+    // upgrade can recognise the existing subscription instead of 409ing (and so
+    // listSubscriptions can fetch it directly, immune to pagination limits).
     const { data: profileRows } = await admin
       .from('profiles')
       .select('subscription_status, subscription_id, plan_id, period_end')
@@ -182,6 +203,39 @@ Deno.serve(async (req) => {
       plan_id?: string | null;
       period_end?: number | null;
     } | null;
+
+    const items = await listSubscriptions(customerId, profile?.subscription_id);
+
+    // ---- Per-user checkout claims ------------------------------------------
+    // Two (near-)simultaneous checkouts for the same user (double-click,
+    // retry after a network timeout, two tabs) must not each mint their own
+    // Razorpay subscription — that is the double-payment landmine. This
+    // conditional update is atomic: only ONE concurrent request wins the row
+    // (the field starts null, the winner sets it, everyone else still sees
+    // `checkout_in_flight IS NOT NULL` and fails the WHERE clause → 0 rows
+    // returned → 409). A crashed function leaves the flag behind, so it is
+    // allowed to be re-taken after STALE_CLAIM_MS.
+    const claimNow = Date.now();
+    const staleBefore = claimNow - STALE_CLAIM_MS;
+    const { data: claimRows, error: claimError } = await admin
+      .from('profiles')
+      .update({ checkout_in_flight: claimNow, updated_at: claimNow })
+      .eq('user_id', userId)
+      .or(
+        `checkout_in_flight.is.null,checkout_in_flight.lte.${staleBefore}`,
+      )
+      .select('user_id');
+    if (claimError) {
+      throw new Error(`could not claim checkout: ${claimError.message}`);
+    }
+    if (!Array.isArray(claimRows) || claimRows.length === 0) {
+      return jsonError(
+        409,
+        'checkout_in_progress',
+        'Another checkout is already in progress for your account. Try again in a moment.',
+      );
+    }
+    claimedCheckout = true;
 
     // Residual paid-through boundary. After an immediate cancel the live
     // subscription is gone, but the customer has paid access through
@@ -560,5 +614,16 @@ Deno.serve(async (req) => {
       'unknown error';
     console.error('[create-checkout-session] razorpay call failed:', detail);
     return jsonError(502, 'razorpay_error', `Razorpay could not start the subscription: ${detail}`);
+  } finally {
+    // Release the per-user claim so the next checkout attempt (page reload,
+    // retry, a second tab) is not blocked once this one has completed (or
+    // errored). A function that dies mid-flight simply leaves a stale claim
+    // that expires via STALE_CLAIM_MS.
+    if (claimedCheckout) {
+      await admin
+        .from('profiles')
+        .update({ checkout_in_flight: null, updated_at: Date.now() })
+        .eq('user_id', userId);
+    }
   }
 });

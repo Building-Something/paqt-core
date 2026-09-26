@@ -6,6 +6,8 @@ import {
   ms,
   periodFromSubscription,
   planIdForPrice,
+  razorpay,
+  razorpayCancel,
   verifyWebhookSignature,
 } from '../_shared/razorpay.ts';
 
@@ -36,6 +38,12 @@ interface RazorpayPayment {
   created_at?: number;
 }
 
+interface RazorpayRefund {
+  id: string;
+  payment_id?: string;
+  status?: string;
+}
+
 interface RazorpayEvent {
   id?: string;
   event?: string;
@@ -43,6 +51,7 @@ interface RazorpayEvent {
   payload?: {
     subscription?: { entity?: RazorpaySubscription };
     payment?: { entity?: RazorpayPayment };
+    refund?: { entity?: RazorpayRefund };
   };
 }
 
@@ -91,9 +100,16 @@ async function claimEvent(
 }
 
 /**
- * Ordering guard. Ignores events older than (or equal to) the newest event
- * already applied to this profile so a late-arriving `subscription.charged`
- * cannot resurrect a subscription that was cancelled afterwards.
+ * Ordering guard. Ignore events strictly older than the newest event already
+ * applied to this profile, so a late-arriving `subscription.charged` cannot
+ * resurrect a subscription that was cancelled afterwards. Razorpay timestamps
+ * are second-granularity, so events within the SAME second carry equal
+ * `created_at`; a `>=` comparison would drop the legitimately newer one (e.g.
+ * a charge at the cycle boundary followed within the same second by a
+ * cancellation) and leave the profile stuck wrong. Equal timestamps therefore
+ * pass through here; the per-event idempotent claim (claimEvent) and the
+ * superseded-subscription guards prevent misordered events from corrupting
+ * state.
  */
 async function isEventFresh(
   admin: ReturnType<typeof createAdmin>,
@@ -112,7 +128,7 @@ async function isEventFresh(
         .eq('payment_customer_id', customerId)
         .maybeSingle();
       const last = data?.last_webhook_event_at;
-      if (last != null && Number(last) >= eventCreatedMs) {
+      if (last != null && Number(last) > eventCreatedMs) {
         return false;
       }
     }
@@ -123,7 +139,7 @@ async function isEventFresh(
         .eq('user_id', userId)
         .maybeSingle();
       const last = data?.last_webhook_event_at;
-      if (last != null && Number(last) >= eventCreatedMs) {
+      if (last != null && Number(last) > eventCreatedMs) {
         return false;
       }
     }
@@ -451,6 +467,90 @@ async function applyPaymentFailed(payment: RazorpayPayment, eventCreatedMs: numb
   return true;
 }
 
+/**
+ * Revokes access when a charge is refunded. A customer who got their money
+ * back (refund.processed on a subscription charge, or a payment.refunded
+ * event) must not keep the plan — leaving the profile active would hand out
+ * the benefit for free. We clear the profile immediately (no residual: the
+ * money is back, so there is no paid-through period to honour) and stop the
+ * owning subscription so no future cycle bills a revoked plan. Only the
+ * subscription the profile currently tracks qualifies; a refund on an old,
+ * superseded subscription is ignored because it predates the current one.
+ */
+async function applyPaymentRefunded(
+  payment: RazorpayPayment,
+  eventCreatedMs: number | null,
+): Promise<boolean> {
+  const admin = createAdmin();
+  const customerId = payment.customer_id ?? '';
+  const subscriptionId = payment.subscription_id ?? null;
+
+  if (!customerId || !(await isEventFresh(admin, eventCreatedMs, customerId, ''))) {
+    return true;
+  }
+
+  const { data: profileRows, error: profileError } = await admin
+    .from('profiles')
+    .select('subscription_id, subscription_status')
+    .eq('payment_customer_id', customerId)
+    .maybeSingle();
+  if (profileError) {
+    console.error('[razorpay-webhook] refund lookup failed for', customerId, profileError.message);
+    return false;
+  }
+  if (!profileRows?.subscription_id) {
+    // No stored subscription to compare against — orphan/test refund; there is
+    // no entitlement to revoke.
+    return true;
+  }
+  if (subscriptionId && profileRows.subscription_id !== subscriptionId) {
+    console.debug(
+      `[razorpay-webhook] refund for superseded sub ${subscriptionId} ignored (profile is on ${profileRows.subscription_id})`,
+    );
+    return true;
+  }
+  if (profileRows.subscription_status === 'canceled') {
+    // Already revoked.
+    return true;
+  }
+
+  // Stop the owning subscription so the next cycle cannot bill a plan that was
+  // just refunded. Best-effort: if it is already cancelled this throws and is
+  // ignored — revoking the profile is the important part.
+  if (subscriptionId) {
+    try {
+      await razorpayCancel(subscriptionId);
+    } catch (err) {
+      console.warn(
+        `[razorpay-webhook] could not stop refunded subscription ${subscriptionId}:`,
+        (err as Error)?.message ?? 'unknown error',
+      );
+    }
+  }
+
+  const updated = await admin
+    .from('profiles')
+    .update({
+      plan_id: null,
+      subscription_status: 'canceled',
+      period_start: null,
+      period_end: null,
+      last_webhook_event_at: eventCreatedMs,
+      updated_at: Date.now(),
+    })
+    .eq('payment_customer_id', customerId)
+    .select('user_id');
+  if (updated.error || (updated.data?.length ?? 0) === 0) {
+    // A failed write OR no matching profile — the latter is an orphan/test
+    // event; acknowledge rather than 500 (which makes Razorpay retry forever).
+    if (updated.error) {
+      console.error('[razorpay-webhook] refund could not revoke access for', customerId);
+    }
+    return updated.error ? false : true;
+  }
+  return true;
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders() });
@@ -532,8 +632,46 @@ Deno.serve(async (req) => {
           }
           break;
         }
+        case 'payment.refunded': {
+          const ok = await applyPaymentRefunded(payment, createdMs);
+          if (!ok) {
+            return jsonError(500, 'db_write_failed', 'Failed to record the payment refund.');
+          }
+          break;
+        }
         default:
           console.debug(`[razorpay-webhook] unhandled payment event ${type}`);
+      }
+      continue;
+    }
+
+    if (type.startsWith('refund.')) {
+      const refund = item.payload?.refund?.entity;
+      if (!refund?.payment_id) {
+        console.debug(`[razorpay-webhook] unhandled refund event ${type}`);
+        continue;
+      }
+      // Only a COMPLETED refund means the money actually went back — revoke on
+      // that alone.
+      if (type !== 'refund.processed') {
+        console.debug(`[razorpay-webhook] unhandled refund event ${type}`);
+        continue;
+      }
+      // A refund entity carries no customer/subscription context, only the
+      // payment it belongs to; resolve the full payment to find the owner.
+      let refundedPayment: RazorpayPayment;
+      try {
+        refundedPayment = await razorpay.payments.fetch(refund.payment_id);
+      } catch (err) {
+        console.error(
+          `[razorpay-webhook] could not resolve refunded payment ${refund.payment_id}:`,
+          (err as Error)?.message ?? 'unknown error',
+        );
+        continue;
+      }
+      const ok = await applyPaymentRefunded(refundedPayment, createdMs);
+      if (!ok) {
+        return jsonError(500, 'db_write_failed', 'Failed to record the payment refund.');
       }
       continue;
     }

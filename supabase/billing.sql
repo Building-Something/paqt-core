@@ -111,6 +111,22 @@ create table if not exists public.profiles (
   updated_at bigint not null default 0
 );
 
+-- Idempotent column for the concurrent-checkout guard (see
+-- create-checkout-session): a per-user claim timestamp. Only one checkout
+-- request per user can win the claim (see update ... where ... in the
+-- function); losers get 409 instead of creating a duplicate Razorpay
+-- subscription.
+do $$
+begin
+  if not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'profiles'
+      and column_name = 'checkout_in_flight'
+  ) then
+    alter table public.profiles add column checkout_in_flight bigint;
+  end if;
+end $$;
+
 grant select, insert, update on public.profiles to service_role;
 grant select on public.profiles to authenticated;
 
