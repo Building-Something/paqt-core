@@ -267,6 +267,7 @@ export async function groqProxyHandler(req, res) {
   // unconfigured Supabase keeps the old open behaviour.
   let userId = null;
   let consumedOp = null;
+  let consumedRunId = null;
 
   if (isBillingConfigured()) {
     const auth = await verifyUser(req.headers.authorization);
@@ -279,28 +280,25 @@ export async function groqProxyHandler(req, res) {
     const requestedOp = req.headers['x-paqt-op'];
     const VALID_OPS = ['analysis', 'draft', 'chat', 'clause'];
     const op = typeof requestedOp === 'string' && VALID_OPS.includes(requestedOp) ? requestedOp : 'chat';
-    // The first request of a multi-step run carries "1" and is the one that is
-    // metered. Later requests of the same run (extra pages, more context) are
-    // plan-checked only so one analysis/draft can never be double-charged.
-    const metered = String(req.headers['x-paqt-metered'] ?? '1') === '1';
-    // Idempotency key: the client sends the analysis/draft entry id so resume
-    // and retry of the same run are served without booking a second unit.
+    // The run id is the only thing that decides metering: the first request of a
+    // multi-step run books the unit (idempotently, per run) and later requests
+    // of the same run are free repeats. Marking a request "not metered" is not
+    // something a browser may do for analysis/draft — that would let a client
+    // skip the meter entirely — so the header is ignored for those ops.
     const runId = typeof req.headers['x-paqt-run-id'] === 'string'
       ? (req.headers['x-paqt-run-id'] || null)
       : null;
 
-    if (metered && !runId && (op === 'analysis' || op === 'draft')) {
-      console.warn(
-        `[paqt] metered request without x-paqt-run-id (op=${op}); DB will refuse the charge`,
-      );
-    }
-
     try {
       if (op === 'analysis' || op === 'draft') {
-        if (metered) {
+        if (runId) {
           await consume(userId, op, runId);
           consumedOp = op;
+          consumedRunId = runId;
         } else {
+          // Requests outside any run are plan-checked only (chat-like
+          // single-shot analysis), exactly as the client documents — never
+          // refused, never charged.
           const active = await isPlanActive(userId);
           if (!active) {
             throw new MeterError({
@@ -363,8 +361,9 @@ export async function groqProxyHandler(req, res) {
   } catch (error) {
     clearTimeout(timer);
     if (consumedOp) {
-      await refund(userId, consumedOp);
+      await refund(userId, consumedOp, consumedRunId);
       consumedOp = null;
+      consumedRunId = null;
     }
     if (error.name === 'AbortError') {
       sendError(res, createError(504, 'timeout', 'The AI analysis took too long.'));
@@ -383,8 +382,9 @@ export async function groqProxyHandler(req, res) {
     upstreamText = await upstream.text();
   } catch {
     if (consumedOp) {
-      await refund(userId, consumedOp);
+      await refund(userId, consumedOp, consumedRunId);
       consumedOp = null;
+      consumedRunId = null;
     }
     sendError(res, createError(502, 'upstream', 'Could not read the AI response.'));
     return;
@@ -394,8 +394,9 @@ export async function groqProxyHandler(req, res) {
 
   if (!upstream.ok) {
     if (consumedOp) {
-      await refund(userId, consumedOp);
+      await refund(userId, consumedOp, consumedRunId);
       consumedOp = null;
+      consumedRunId = null;
     }
     let parsed = null;
     try {

@@ -15,6 +15,30 @@ const KEY_ID = Deno.env.get('RAZORPAY_KEY_ID') ?? '';
 
 const ACTIVE_SUB_STATUSES = new Set(['authenticated', 'active']);
 
+/** Persists the new subscription on the profile; throws on DB failure so the
+ * checkout never reports success the profile does not know about. */
+async function mirrorSubscription(
+  admin: ReturnType<typeof createAdmin>,
+  userId: string,
+  customerId: string,
+  subscriptionId: string,
+): Promise<void> {
+  const { error } = await admin
+    .from('profiles')
+    .upsert(
+      {
+        user_id: userId,
+        payment_customer_id: customerId,
+        subscription_id: subscriptionId,
+        updated_at: Date.now(),
+      },
+      { onConflict: 'user_id' },
+    );
+  if (error) {
+    throw new Error(`could not save subscription on profile: ${error.message}`);
+  }
+}
+
 type SubscriptionEntity = {
   id?: string;
   status?: string;
@@ -31,10 +55,23 @@ type SubscriptionEntity = {
  */
 async function listSubscriptions(customerId: string): Promise<SubscriptionEntity[]> {
   try {
-    const response = await razorpay.subscriptions.all({ count: 100 });
-    return ((response.items as SubscriptionEntity[]) ?? []).filter(
+    // Fetch the two most recent pages so a customer with >100 (mostly
+    // cancelled) subscriptions still yields their live ones; Razorpay's list
+    // endpoint has no customer filter.
+    const first = await razorpay.subscriptions.all({ count: 100 });
+    let items = ((first.items as SubscriptionEntity[]) ?? []).filter(
       (sub) => sub.customer_id === customerId,
     );
+    if (((first as { items?: unknown[] }).items?.length ?? 0) >= 100) {
+      const lastId = ((first.items as SubscriptionEntity[]) ?? [])[99]?.id;
+      const second = await razorpay.subscriptions.all({ count: 100, from: lastId ?? '' });
+      items = items.concat(
+        (((second.items as SubscriptionEntity[]) ?? []).filter(
+          (sub) => sub.customer_id === customerId && sub.id !== lastId,
+        )),
+      );
+    }
+    return items;
   } catch (err) {
     const detail = (err as Error)?.message ?? 'unknown error';
     console.error('[create-checkout-session] could not list subscriptions:', detail);
@@ -188,6 +225,71 @@ Deno.serve(async (req) => {
     // The profile's stored subscription_id may trail the live one (e.g. after an
     // interrupted upgrade), so the cancel state is the source of truth.
     if (active?.id && hasResidual) {
+      // ---- Pending future-start subscription (never-started) --------------
+      // An 'authenticated' sub whose first charge (start_at) has not yet landed
+      // has no billing cycle: the customer authorised payment but nothing was
+      // taken and no period was granted. Renew/upgrade must not treat it as an
+      // active sub — resuming/switching it would write profiles as active with
+      // null periods (new plan granted free and the paid-period cutoff erased).
+      // If it is for the requested plan it is ALREADY the booked renewal (it
+      // starts at period_end), so just hand it back. If it is for a different
+      // plan, cancel it (nothing was ever charged) and book the requested plan
+      // starting exactly at period_end — preserving the same paid boundary.
+      if (active?.status === 'authenticated') {
+        try {
+          const pending = await razorpay.subscriptions.fetch(active.id);
+          const pendingPlanId = (pending as { plan_id?: string }).plan_id ?? null;
+          const neverStarted =
+            (pending as { current_start?: number }).current_start == null;
+          if (neverStarted) {
+            if (pendingPlanId && pendingPlanId === plan.price_id) {
+              // Same plan already booked to start at period_end — return it.
+              return new Response(
+                JSON.stringify({
+                  key_id: KEY_ID,
+                  subscription_id: active.id,
+                  plan_id: plan.id,
+                  name,
+                  email,
+                }),
+                { headers: { 'Content-Type': 'application/json', ...corsHeaders() } },
+              );
+            }
+            // Different plan (or continuity lost): cancel the never-started
+            // pending sub — no charge has been made, so cancelling is lossless —
+            // then book the requested plan from period_end.
+            await razorpayCancel(active.id);
+            const futureStartSec =
+              profilePeriodEndSec! > Math.floor(Date.now() / 1000)
+                ? profilePeriodEndSec
+                : undefined;
+            const subscription = await razorpay.subscriptions.create({
+              plan_id: plan.price_id,
+              total_count: 12,
+              customer_id: customerId,
+              customer_notify: 1,
+              ...(futureStartSec ? { start_at: futureStartSec } : {}),
+              notes: { user_id: userId, plan_id: plan.id },
+            });
+            await mirrorSubscription(admin, userId, customerId, subscription.id);
+            return new Response(
+              JSON.stringify({
+                key_id: KEY_ID,
+                subscription_id: subscription.id,
+                name,
+                email,
+              }),
+              { headers: { 'Content-Type': 'application/json', ...corsHeaders() } },
+            );
+          }
+        } catch (err) {
+          const detail = (err as Error)?.message ?? 'unknown error';
+          console.error('[create-checkout-session] pending-sub check failed:', detail);
+          // Fall through to the normal renew path; the resume/switch errors
+          // below handle the rest.
+        }
+      }
+
       // "Renew with a new payment method": do not touch the existing sub in
       // place — Razorpay cannot swap the payment method on a live subscription.
       // Create a fresh subscription (the checkout modal opens so the customer
@@ -232,17 +334,7 @@ Deno.serve(async (req) => {
             throw err;
           }
 
-          await admin
-            .from('profiles')
-            .upsert(
-              {
-                user_id: userId,
-                payment_customer_id: customerId,
-                subscription_id: subscription.id,
-                updated_at: Date.now(),
-              },
-              { onConflict: 'user_id' },
-            );
+          await mirrorSubscription(admin, userId, customerId, subscription.id);
 
           return new Response(
             JSON.stringify({
@@ -335,17 +427,7 @@ Deno.serve(async (req) => {
               throw err;
             }
 
-            await admin
-              .from('profiles')
-              .upsert(
-                {
-                  user_id: userId,
-                  payment_customer_id: customerId,
-                  subscription_id: upgraded.id,
-                  updated_at: Date.now(),
-                },
-                { onConflict: 'user_id' },
-              );
+            await mirrorSubscription(admin, userId, customerId, upgraded.id);
 
             return new Response(
               JSON.stringify({
@@ -365,7 +447,7 @@ Deno.serve(async (req) => {
         const periodStart = ms(currentStartSec);
         const periodEnd = ms(periodEndSec);
 
-        await admin
+        const { error: mirrorError } = await admin
           .from('profiles')
           .update({
             plan_id: plan.id,
@@ -376,6 +458,9 @@ Deno.serve(async (req) => {
             updated_at: Date.now(),
           })
           .eq('user_id', userId);
+        if (mirrorError) {
+          throw new Error(`could not save renewed profile: ${mirrorError.message}`);
+        }
 
         return new Response(
           JSON.stringify({
@@ -423,17 +508,7 @@ Deno.serve(async (req) => {
         notes: { user_id: userId, plan_id: plan.id },
       });
 
-      await admin
-        .from('profiles')
-        .upsert(
-          {
-            user_id: userId,
-            payment_customer_id: customerId,
-            subscription_id: subscription.id,
-            updated_at: Date.now(),
-          },
-          { onConflict: 'user_id' },
-        );
+      await mirrorSubscription(admin, userId, customerId, subscription.id);
 
       return new Response(
         JSON.stringify({
@@ -467,17 +542,7 @@ Deno.serve(async (req) => {
     // Persist the subscription id right away (not just via the delayed
     // subscription.activated webhook) so cancel/manage always has a handle,
     // and so billing shows the started subscription to this customer.
-    await admin
-      .from('profiles')
-      .upsert(
-        {
-          user_id: userId,
-          payment_customer_id: customerId,
-          subscription_id: subscription.id,
-          updated_at: Date.now(),
-        },
-        { onConflict: 'user_id' },
-      );
+    await mirrorSubscription(admin, userId, customerId, subscription.id);
 
     return new Response(
       JSON.stringify({

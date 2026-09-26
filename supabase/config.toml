@@ -381,6 +381,18 @@ inspector_port = 8083
 # The Deno major version to use.
 deno_version = 2
 
+# Razorpay delivers webhooks with its OWN HMAC signature, not a Supabase user
+# JWT. The platform JWT check must be disabled so requests reach the handler,
+# which then verifies the Razorpay signature over the raw body (the real gate).
+[functions.razorpay-webhook]
+verify_jwt = false
+
+[functions.create-checkout-session]
+verify_jwt = true
+
+[functions.subscription-manage]
+verify_jwt = true
+
 # [edge_runtime.secrets]
 # secret_key = "env(SECRET_VALUE)"
 

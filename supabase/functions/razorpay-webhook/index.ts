@@ -11,6 +11,10 @@ import {
 
 const WEBHOOK_SECRET = Deno.env.get('RAZORPAY_WEBHOOK_SECRET') ?? '';
 
+// In-flight dedup for the rare windows where the DB claim succeeds for a prior
+// event in the SAME function invocation chain (see the email/event loop below).
+const eventSeen = new Set<string>();
+
 interface RazorpaySubscription {
   id: string;
   plan_id?: string;
@@ -55,27 +59,35 @@ async function claimEvent(
   if (!eventId) {
     return true;
   }
-  try {
-    const { data: inserted } = await admin
-      .from('webhook_events')
-      .upsert(
-        {
-          event_id: eventId,
-          event_type: typeof event.event === 'string' ? event.event : '',
-          received_at: Date.now(),
-        },
-        { onConflict: 'event_id', ignoreDuplicates: true },
-      )
-      .select('event_id');
-    // Upsert with ignoreDuplicates returns no rows on a duplicate, so a prior
-    // delivery has already claimed this event.
-    return Array.isArray(inserted) && inserted.length > 0;
-  } catch (err) {
-    // webhook_events may not exist yet (migration not applied); do not fail
-    // the entire webhook over dedup bookkeeping.
-    console.error('[razorpay-webhook] event dedup table unavailable:', (err as Error)?.message);
+  if (eventSeen.has(eventId)) {
+    return false;
+  }
+  const { data: inserted, error: dedupError } = await admin
+    .from('webhook_events')
+    .upsert(
+      {
+        event_id: eventId,
+        event_type: typeof event.event === 'string' ? event.event : '',
+        received_at: Date.now(),
+      },
+      { onConflict: 'event_id', ignoreDuplicates: true },
+    )
+    .select('event_id');
+  if (dedupError) {
+    // Dedup bookkeeping must never block billing automation: a missing table
+    // or a DB hiccup falls back to this event being processed (idempotent)
+    // rather than silently dropping the webhook, which would leave the
+    // subscription state stale forever.
+    console.error('[razorpay-webhook] event dedup unavailable, processing event anyway:', dedupError.message);
     return true;
   }
+  // A row that won the insert means the first delivery is processing. A
+  // duplicate returns no rows, so a prior delivery already claimed it.
+  if (Array.isArray(inserted) && inserted.length > 0) {
+    eventSeen.add(eventId);
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -145,12 +157,15 @@ async function applySubscriptionProfile(
     return true;
   }
 
+  const toMs = (value: bigint | number | null | undefined): number | null =>
+    typeof value === 'bigint' ? Number(value) : typeof value === 'number' ? value : null;
+
   const profile = {
     plan_id: planId,
     subscription_status: 'active',
     subscription_id: subscription.id,
-    period_start: period.start,
-    period_end: period.end,
+    period_start: toMs(period.start),
+    period_end: toMs(period.end),
     last_webhook_event_at: eventCreatedMs,
     updated_at: Date.now(),
   };
@@ -268,10 +283,21 @@ async function applyEndOfSubscription(
   // cancel/stop at cycle end, Razorpay leaves `end_at` as the full term end
   // (e.g. 12 months out) while `current_end` is the boundary the customer
   // actually paid through, so current_end is the source of truth here.
-  const periodEndSec = subscription.current_end ?? subscription.end_at;
+  const periodEndSec = subscription.current_end ?? null;
   const periodEndMs =
     typeof periodEndSec === 'number' && periodEndSec > 0 ? Number(ms(periodEndSec)) : null;
-  const keepsAccess = periodEndMs != null && periodEndMs > Date.now() + 60_000;
+
+  // A subscription that never entered a billing cycle (future `start_at`,
+  // cancelled/halted/paused before it started) grants no residual access of
+  // its own: `current_end` is null and `end_at` is the merely-scheduled full
+  // term. The profile's existing period_end is the paid window of the
+  // PREVIOUS subscription and must be left untouched — rewriting it from this
+  // event would either hang free access for a year or cut the paid period short.
+  if (periodEndMs == null) {
+    return true;
+  }
+
+  const keepsAccess = periodEndMs > Date.now() + 60_000;
 
   const now = Date.now();
   const base = { last_webhook_event_at: eventCreatedMs, updated_at: now };
@@ -384,6 +410,26 @@ async function applyPaymentFailed(payment: RazorpayPayment, eventCreatedMs: numb
   if (!customerId || !(await isEventFresh(admin, eventCreatedMs, customerId, ''))) {
     return true;
   }
+
+  // Only a failure on the subscription the profile currently tracks should
+  // flip it to past_due. A late payment.failed from an older (now superseded)
+  // subscription must not mark a newer, healthy subscription as unpaid.
+  const { data: profileRows, error: profileError } = await admin
+    .from('profiles')
+    .select('subscription_id')
+    .eq('payment_customer_id', customerId)
+    .maybeSingle();
+  if (profileError || !profileRows?.subscription_id) {
+    // No stored subscription to compare against — nothing to degrade.
+    return true;
+  }
+  if (subscriptionId && profileRows.subscription_id !== subscriptionId) {
+    console.debug(
+      `[razorpay-webhook] payment.failed for superseded sub ${subscriptionId} ignored (profile is on ${profileRows.subscription_id})`,
+    );
+    return true;
+  }
+
   const updated = await admin
     .from('profiles')
     .update({
@@ -395,8 +441,12 @@ async function applyPaymentFailed(payment: RazorpayPayment, eventCreatedMs: numb
     .eq('payment_customer_id', customerId)
     .select('user_id');
   if (updated.error || (updated.data?.length ?? 0) === 0) {
-    console.error('[razorpay-webhook] payment.failed could not mark past_due for', customerId);
-    return false;
+    // A failed write OR no matching profile — the latter is an orphan/test
+    // event; acknowledge rather than 500 (which makes Razorpay retry forever).
+    if (updated.error) {
+      console.error('[razorpay-webhook] payment.failed could not mark past_due for', customerId);
+    }
+    return updated.error ? false : true;
   }
   return true;
 }
@@ -418,7 +468,24 @@ Deno.serve(async (req) => {
     return jsonError(500, 'not_configured', 'Webhook secret not configured.');
   }
 
+  const contentLength = Number(req.headers.get('content-length') ?? '0');
+  if (contentLength > 2_000_000) {
+    return jsonError(413, 'payload_too_large', 'Webhook payload too large.');
+  }
+
   const raw = await req.text();
+  if (raw.length > 2_000_000) {
+    return jsonError(413, 'payload_too_large', 'Webhook payload too large.');
+  }
+
+  // Verify the HMAC over the RAW body first, before any parsing or state
+  // mutation. Rejecting early keeps untrusted input away from JSON.parse and
+  // prevents forgery from even reaching the event switch.
+  const signed = await verifyWebhookSignature(raw, signature, WEBHOOK_SECRET);
+  if (!signed) {
+    console.error('[razorpay-webhook] signature verification failed.');
+    return jsonError(400, 'bad_request', 'Invalid signature.');
+  }
 
   let event: RazorpayEvent;
   try {
@@ -426,14 +493,6 @@ Deno.serve(async (req) => {
   } catch {
     return jsonError(400, 'bad_request', 'Event body must be JSON.');
   }
-
-  const signed = await verifyWebhookSignature(raw, signature, WEBHOOK_SECRET);
-  if (!signed) {
-    console.error('[razorpay-webhook] signature verification failed.');
-    return jsonError(400, 'bad_request', 'Invalid signature.');
-  }
-
-  const createdMs = typeof event.created_at === 'number' ? Number(ms(event.created_at)) : null;
 
   // Razorpay delivers one event per call; tolerate an array for safety.
   const events: RazorpayEvent[] = Array.isArray(event) ? (event as unknown as RazorpayEvent[]) : [event];
@@ -447,6 +506,15 @@ Deno.serve(async (req) => {
       console.debug(`[razorpay-webhook] duplicate event ignored: ${item.id}`);
       continue;
     }
+
+    // Per-event timestamps: array-shaped bodies carry created_at on each item
+    // (the outer object has none), so evaluate it inside the loop.
+    const createdMs =
+      typeof item.created_at === 'number'
+        ? Number(ms(item.created_at))
+        : typeof event.created_at === 'number'
+          ? Number(ms(event.created_at))
+          : null;
 
     if (type.startsWith('payment.')) {
       const payment = item.payload?.payment?.entity;

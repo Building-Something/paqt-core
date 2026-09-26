@@ -11,6 +11,7 @@ import type { RealtimeChannel, Session, User } from '@supabase/supabase-js';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import { bindHistoryToUser, unbindHistoryToUser } from '../services/historyService';
 import { clearRemoteHistory } from '../services/supabaseHistoryService';
+import { cancelSubscription, manageSubscription } from '../services/entitlementService';
 
 export interface AuthActionResult {
   ok: boolean;
@@ -319,6 +320,40 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await clearRemoteHistory(userId);
     } catch {
       historyWiped = false;
+    }
+
+    // A deleted account must not keep re-billing (the deletion wipes the
+    // profile row that future webhooks would otherwise key against). Stop any
+    // live subscription first; if that fails, refuse to delete the login —
+    // otherwise the customer is charged forever with no way to sign in and
+    // cancel. Users with no live/canceling subscription skip straight through.
+    let billingStopped = true;
+    try {
+      const info = await manageSubscription();
+      if (
+        info.hasSubscription &&
+        info.status &&
+        info.status !== 'none' &&
+        info.status !== 'canceling' &&
+        info.status !== 'canceled'
+      ) {
+        try {
+          await cancelSubscription();
+        } catch (err) {
+          console.debug('[paqt] cancelSubscription failed before account deletion:', err);
+          billingStopped = false;
+        }
+      }
+    } catch {
+      billingStopped = true;
+    }
+
+    if (!billingStopped) {
+      return {
+        ok: false,
+        error:
+          'Your subscription could not be cancelled automatically, and merging your account would block you from managing it. Please contact support to cancel billing before deleting your account.',
+      };
     }
 
     let identityRemoved = false;

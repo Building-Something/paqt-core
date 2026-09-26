@@ -96,9 +96,19 @@ export async function razorpayCancel(subscriptionId) {
   const refreshed = await razorpayApi(`/subscriptions/${subscriptionId}`);
   const status = (refreshed as { status?: string }).status ?? '';
   const chargeAt = (refreshed as { charge_at?: number | null }).charge_at ?? null;
-  if (status !== 'cancelled' || chargeAt != null) {
+  // `status === 'cancelled'` is the authoritative signal. `charge_at` can
+  // legitimately remain populated after a cancellation in some Razorpay
+  // configurations (their own docs return it on the cancelled entity), so a
+  // pending charge there must warn, not fail — failing would turn a successful
+  // cancellation into a false 502 while billing has actually stopped.
+  if (status !== 'cancelled') {
     throw new Error(
-      `cancel verification failed for ${subscriptionId}: status=${status ?? 'unknown'}, charge_at=${String(chargeAt)}`
+      `cancel verification failed for ${subscriptionId}: status=${status ?? 'unknown'}`
+    );
+  }
+  if (chargeAt != null && Number(chargeAt) > Math.floor(Date.now() / 1000)) {
+    console.warn(
+      `[razorpay] sub ${subscriptionId} cancelled but retains a future charge_at=${chargeAt}; verify no charge recurs`
     );
   }
   return cancelled;

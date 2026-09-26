@@ -164,26 +164,22 @@ async function callGroq(
   let response: Response;
   try {
     const op = opStack[opStack.length - 1];
-    // Metering is signalled explicitly on every analysis/draft request so the
-    // server never has to guess from a missing header. The DB books at most one
-    // unit per (user, period, op, run id), so marking every request of a run as
-    // metered is safe: the first call charges, all later calls of the same run
-    // are deduped by the ledger as free repeats. One analysis therefore makes as
+    // Metering is decided server-side from the run id, never from a client
+    // flag the browser could clear to skip the meter: the DB books at most one
+    // unit per (user, period, op, run id), so every request of a run is safe to
+    // send — the first call charges, all later calls of the same run are
+    // deduped by the ledger as free repeats. One analysis therefore makes as
     // many Groq calls as it needs (pages, interaction, synthesis) while the
     // monthly quota counts the run itself only once. A request outside a run
-    // (no id) is marked explicitly non-metered so it is checked against the
-    // plan but never billed and never refused.
+    // (no id) is checked against the plan but never billed and never refused.
     const runId = groqRunId;
     const token = await getGroqAccessToken();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'x-paqt-op': op,
     };
-    if (op === 'analysis' || op === 'draft') {
-      headers['x-paqt-metered'] = runId !== null ? '1' : '0';
-      if (runId !== null) {
-        headers['x-paqt-run-id'] = runId;
-      }
+    if (runId !== null && (op === 'analysis' || op === 'draft')) {
+      headers['x-paqt-run-id'] = runId;
     }
     if (token) {
       headers.Authorization = `Bearer ${token}`;

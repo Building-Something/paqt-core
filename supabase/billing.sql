@@ -85,6 +85,9 @@ where id = 'business';
 create index if not exists plans_price_id_idx
   on public.plans (price_id);
 
+-- Drop the Stripe-era duplicate index (plans_price_id_idx is the same column).
+drop index if exists public.plans_stripe_price_idx;
+
 alter table public.plans enable row level security;
 
 drop policy if exists "plans_select_all" on public.plans;
@@ -112,6 +115,9 @@ grant select, insert, update on public.profiles to service_role;
 grant select on public.profiles to authenticated;
 
 alter table public.profiles enable row level security;
+
+create index if not exists profiles_payment_customer_id_idx
+  on public.profiles (payment_customer_id);
 
 drop policy if exists "profiles_select_own" on public.profiles;
 create policy "profiles_select_own"
@@ -288,7 +294,9 @@ begin
     return jsonb_build_object('allowed', false, 'reason', 'plan_expired');
   end if;
 
-  -- Credits-based plan (Business): deduct the unit cost in cash terms.
+  -- Credits-based plan (Business): deduct the unit cost in cash terms. The
+  -- run ledger deduplicates exactly like the quota path, so a resume/retry of
+  -- the same run is never charged twice and paqt_refund stays idempotent.
   if v_plan.analysis_quota is null or v_plan.draft_quota is null then
     if p_op = 'analysis' then
       v_cost := coalesce(v_plan.credits_per_analysis, 0);
@@ -308,6 +316,25 @@ begin
       v_balance := 0;
     end if;
 
+    -- Same run already paid: free repeat, mirror the meter, do not re-deduct.
+    if exists (
+      select 1
+        from public.usage_run_log
+        where user_id = p_user
+          and period_start = v_profile.period_start
+          and op = p_op
+          and run_id = p_run
+    ) then
+      perform public.paqt_sync_meter(p_user, v_profile.period_start, v_now);
+      return jsonb_build_object(
+        'allowed', true,
+        'plan', v_plan.id,
+        'run', p_run,
+        'credits_remaining', v_balance,
+        'repeat', true
+      );
+    end if;
+
     if v_balance < v_cost then
       return jsonb_build_object(
         'allowed', false,
@@ -320,6 +347,12 @@ begin
       set balance = balance - v_cost,
           updated_at = v_now
       where user_id = p_user;
+
+    insert into public.usage_run_log (user_id, period_start, op, run_id, created_at)
+    values (p_user, v_profile.period_start, p_op, p_run, v_now)
+    on conflict (user_id, period_start, op, run_id) do nothing;
+
+    perform public.paqt_sync_meter(p_user, v_profile.period_start, v_now);
 
     return jsonb_build_object(
       'allowed', true,
@@ -394,8 +427,12 @@ grant execute on function public.paqt_consume(uuid, text, text) to service_role;
 revoke all on function public.paqt_sync_meter(uuid, bigint, bigint) from public, anon, authenticated;
 grant execute on function public.paqt_sync_meter(uuid, bigint, bigint) to service_role;
 
--- ---- paqt_refund(p_user, p_op): restore a unit after upstream failure ----
-create or replace function public.paqt_refund(p_user uuid, p_op text)
+-- ---- paqt_refund(p_user, p_op, p_run): restore a unit after upstream failure ----
+-- The run ledger is the source of truth, so a refund must delete the booked
+-- row (not just patch the meter mirror). Deleting only when the run row still
+-- exists makes the refund idempotent: retries or a racing webhook cannot credit
+-- a run twice. The meter mirror is then resynced from the ledger.
+create or replace function public.paqt_refund(p_user uuid, p_op text, p_run text default null)
 returns jsonb
 language plpgsql
 security invoker
@@ -406,6 +443,7 @@ declare
   v_plan public.plans%rowtype;
   v_now bigint;
   v_cost numeric;
+  v_deleted integer;
 begin
   if p_user is null or p_op not in ('analysis', 'draft') then
     return jsonb_build_object('ok', false);
@@ -425,6 +463,25 @@ begin
     return jsonb_build_object('ok', false);
   end if;
 
+  -- A refund without a run id cannot reference a booked row; never credit
+  -- blindly. Mirrors the "no_run" rule in paqt_consume.
+  if p_run is null or p_run = '' then
+    return jsonb_build_object('ok', false);
+  end if;
+
+  -- Book the run row back out of the ledger. Returns 1 only if the row
+  -- (user, period, op, run) actually existed → exactly-once credit semantics.
+  delete from public.usage_run_log
+    where user_id = p_user
+      and period_start = v_profile.period_start
+      and op = p_op
+      and run_id = p_run;
+  get diagnostics v_deleted = row_count;
+
+  if v_deleted = 0 then
+    return jsonb_build_object('ok', true, 'already_refunded', true);
+  end if;
+
   if v_plan.analysis_quota is null or v_plan.draft_quota is null then
     if p_op = 'analysis' then
       v_cost := coalesce(v_plan.credits_per_analysis, 0);
@@ -435,21 +492,16 @@ begin
       set balance = balance + v_cost,
           updated_at = v_now
       where user_id = p_user;
-    return jsonb_build_object('ok', true);
   end if;
 
-  update public.usage_meters
-    set analysis_used = greatest(0, analysis_used - case when p_op = 'analysis' then 1 else 0 end),
-        draft_used = greatest(0, draft_used - case when p_op = 'draft' then 1 else 0 end),
-        updated_at = v_now
-    where user_id = p_user and period_start = v_profile.period_start;
+  perform public.paqt_sync_meter(p_user, v_profile.period_start, v_now);
 
   return jsonb_build_object('ok', true);
 end;
 $$;
 
-revoke all on function public.paqt_refund(uuid, text) from public, anon, authenticated;
-grant execute on function public.paqt_refund(uuid, text) to service_role;
+revoke all on function public.paqt_refund(uuid, text, text) from public, anon, authenticated;
+grant execute on function public.paqt_refund(uuid, text, text) to service_role;
 
 -- ---- paqt_plan_status(p_user): active-plan gate for unmetered ops ----
 create or replace function public.paqt_plan_status(p_user uuid)

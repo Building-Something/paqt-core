@@ -101,17 +101,35 @@ Deno.serve(async (req) => {
     const periodEndMs =
       typeof periodEndSec === 'number' && periodEndSec > 0 ? Number(ms(periodEndSec)) : null;
 
+    // A never-started subscription (future start_at, cancelled before it
+    // charged) has no current cycle — current_end is null. Its own `end_at`
+    // is just the full scheduled term and must not become a paid boundary.
+    // If the profile already carries a paid-through period_end (the previous
+    // subscription's residual access, e.g. a Pro period ending Oct 25), keep
+    // it exactly as-is; do not wipe it to null.
+    const finalPeriodEnd = periodEndMs ?? profile?.period_end ?? null;
+
     // Mirror the scheduled cancellation so the UI can switch from "Cancel" to
     // plan options right away, without waiting for the subscription.cancelled
     // webhook to land.
-    await admin
+    const { error: mirrorError } = await admin
       .from('profiles')
       .update({
         subscription_status: 'canceling',
-        period_end: periodEndMs,
+        period_end: finalPeriodEnd,
         updated_at: Date.now(),
       })
       .eq('user_id', userId);
+    if (mirrorError) {
+      // The Razorpay sub is cancelled, but the local status is stale. Surfacing
+      // this is better than pretending success (the webhook may already have
+      // corrected it, but if the DB is down, the UI would keep showing active).
+      console.error(
+        '[subscription-manage] cancelled sub on Razorpay but could not mirror status:',
+        mirrorError.message,
+      );
+      return jsonError(502, 'db_write_failed', 'Subscription cancelled, but its local status could not be updated. Refresh in a moment.');
+    }
 
     return new Response(
       JSON.stringify({
@@ -119,7 +137,7 @@ Deno.serve(async (req) => {
         subscription_id: subscriptionId,
         status: profile?.subscription_status ?? 'none',
         plan_id: profile?.plan_id ?? null,
-        period_end: periodEndMs,
+        period_end: finalPeriodEnd,
         cancels_at_period_end: true,
       }),
       { headers: { 'Content-Type': 'application/json', ...corsHeaders() } },

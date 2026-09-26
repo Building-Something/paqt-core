@@ -192,13 +192,19 @@ export async function consume(userId, op, runId) {
   return { allowed: true, userId, meta: data };
 }
 
-/** Restores a metered unit after an upstream Groq failure. */
-export async function refund(userId, op) {
+/** Restores a metered unit after an upstream Groq failure. Requires the same
+ * run id that `consume()` booked, otherwise it cannot reference the ledger row
+ * (and must never credit blindly). */
+export async function refund(userId, op, runId) {
   if (!admin || (op !== 'analysis' && op !== 'draft')) {
     return;
   }
+  if (!runId) {
+    console.warn(`[paqt] refund skipped: no run id for ${op}`);
+    return;
+  }
   try {
-    await admin.rpc('paqt_refund', { p_user: userId, p_op: op });
+    await admin.rpc('paqt_refund', { p_user: userId, p_op: op, p_run: runId });
   } catch (err) {
     console.error('[paqt] paqt_refund failed:', err?.message ?? err);
   }
