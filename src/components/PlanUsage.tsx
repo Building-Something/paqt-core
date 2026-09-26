@@ -1,5 +1,5 @@
-import { useCallback, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Loader2, ScanSearch, FilePenLine, ArrowUpRight, Coins, X } from 'lucide-react';
 import { useEntitlement } from '../contexts/EntitlementContext';
 import { useUpgrade } from './UpgradeDialog';
@@ -7,7 +7,9 @@ import { useToast } from '../contexts/ToastContext';
 import {
   beginCheckout,
   cancelSubscription,
+  manageSubscription,
   openRazorpayCheckout,
+  reconciledMessage,
   PLANS,
   canRun,
   isPlanActive,
@@ -159,19 +161,105 @@ export function PlanUsageChip() {
   );
 }
 
+/** Webhook activation can lag the payment redirect, so poll briefly for it. */
+const ACTIVATION_POLL_MS = 2000;
+const MAX_ACTIVATION_POLLS = 8;
+
 export function PlanUsageCard({ compact = false }: { compact?: boolean }) {
-  const { usage, refresh } = useEntitlement();
+  const { usage, loading, refresh } = useEntitlement();
   const { toast } = useToast();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [busy, setBusy] = useState<string | null>(null);
+  const reconciledFor = useRef<string | null>(null);
+  const usageRef = useRef(usage);
 
   const active = isPlanActive(usage);
   const canceling = isPlanCanceling(usage);
+
+  // Keep a render-free handle on the freshest usage so the post-payment poller
+  // below can read it without re-subscribing on every refresh.
+  useEffect(() => {
+    usageRef.current = usage;
+  }, [usage]);
+
+  // The profile mirror of Razorpay is written by the subscription.activated
+  // webhook. If that webhook never landed, this card would show "no plan" for a
+  // subscription the customer has already paid for — with no way to tell that
+  // apart from genuinely having none. `manageSubscription` reconciles against
+  // Razorpay before answering, so one probe on arrival heals that state. Only
+  // attempted when the profile claims no live plan, so free users pay nothing.
+  useEffect(() => {
+    if (loading || !usage.signedIn) {
+      return;
+    }
+    if (isPlanActive(usage)) {
+      // Re-arm, so signing in as somebody else probes their billing too.
+      reconciledFor.current = null;
+      return;
+    }
+    const key = usage.planId ?? 'none';
+    if (reconciledFor.current === key) {
+      return;
+    }
+    reconciledFor.current = key;
+    let cancelled = false;
+    void manageSubscription()
+      .then((info) => {
+        if (!cancelled && info.reconciled) {
+          const name = PLANS.find((plan) => plan.id === info.planId)?.name ?? 'Your plan';
+          toast('info', `We re-synced your billing with Razorpay — ${name} is active again. You were not charged.`);
+        }
+      })
+      .catch(() => {
+        // A failed probe must not block the page; the next visit retries because
+        // the ref is per-mount.
+      })
+      .finally(() => {
+        if (!cancelled) {
+          void refresh();
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [loading, usage, refresh, toast]);
+
+  // Checkout sends the customer here after a successful payment. The webhook
+  // that activates the plan can land a moment later, so poll briefly instead of
+  // showing a stale "no plan" on arrival.
+  useEffect(() => {
+    if (searchParams.get('checkout') !== 'success') {
+      return;
+    }
+    const next = new URLSearchParams(searchParams);
+    next.delete('checkout');
+    setSearchParams(next, { replace: true });
+    toast('success', 'Payment received. Setting up your plan…');
+
+    let attempts = 0;
+    const timer = window.setInterval(() => {
+      attempts += 1;
+      void refresh().then(() => {
+        if (isPlanActive(usageRef.current) || attempts >= MAX_ACTIVATION_POLLS) {
+          window.clearInterval(timer);
+        }
+      });
+    }, ACTIVATION_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [searchParams, setSearchParams, refresh, toast]);
 
   async function handleCheckout(planId: string, paymentMethod: 'same' | 'new' = 'same') {
     setBusy(planId);
     try {
       const checkout = await beginCheckout(planId, { paymentMethod });
       const outcome = await openRazorpayCheckout(checkout);
+      if (outcome === 'reconciled') {
+        // Paqt had lost track of a subscription that was already paid for and
+        // rebuilt it from Razorpay. Nothing was charged, so say so.
+        toast('info', reconciledMessage(checkout));
+        await refresh();
+        return;
+      }
       if (outcome === 'completed') {
         window.location.assign('/settings?checkout=success');
       }

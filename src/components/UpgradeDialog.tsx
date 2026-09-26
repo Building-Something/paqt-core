@@ -16,6 +16,7 @@ import {
   openRazorpayCheckout,
   PLANS,
   BUSINESS_PLAN,
+  reconciledMessage,
   type CheckoutError,
 } from '../services/entitlementService';
 import { Button } from './ui/button';
@@ -95,6 +96,15 @@ export function UpgradeDialog({
     try {
       const checkout = await beginCheckout(planId);
       const outcome = await openRazorpayCheckout(checkout);
+      if (outcome === 'reconciled') {
+        // Paqt had lost track of a subscription that was already paid for and
+        // rebuilt it. No payment was taken, so say so rather than pretending a
+        // fresh checkout succeeded.
+        toast('info', reconciledMessage(checkout));
+        onClose();
+        await refresh();
+        return;
+      }
       if (outcome === 'completed') {
         window.location.assign('/settings?checkout=success');
       }

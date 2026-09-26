@@ -5,7 +5,10 @@ import {
   isPlanCanceling,
   canRun,
   upgradeMessage,
+  openRazorpayCheckout,
+  reconciledMessage,
   NO_USAGE,
+  type RazorpayCheckout,
   type UsageSnapshot,
 } from './entitlementService';
 
@@ -140,5 +143,48 @@ describe('upgradeMessage', () => {
   it('mentions the matching quota', () => {
     expect(upgradeMessage('analysis')).toContain('analysis quota');
     expect(upgradeMessage('draft')).toContain('draft quota');
+  });
+});
+
+function checkout(overrides: Partial<RazorpayCheckout> = {}): RazorpayCheckout {
+  return {
+    key: 'rzp_test',
+    subscriptionId: 'sub_123',
+    name: 'Ada',
+    email: 'ada@example.com',
+    ...overrides,
+  };
+}
+
+describe('openRazorpayCheckout', () => {
+  it('never opens a payment modal when the subscription was switched in place', async () => {
+    await expect(openRazorpayCheckout(checkout({ switched: true }))).resolves.toBe('completed');
+  });
+
+  it('reports a repaired subscription as reconciled, not as a fresh payment', async () => {
+    // The whole point of the repair path: the customer already paid, so nothing
+    // must be charged again and the UI must not claim a payment just happened.
+    await expect(
+      openRazorpayCheckout(checkout({ switched: true, reconciled: true })),
+    ).resolves.toBe('reconciled');
+  });
+});
+
+describe('reconciledMessage', () => {
+  it('names the plan and states that nothing was charged again', () => {
+    const message = reconciledMessage(checkout({ planId: 'pro', periodEnd: null }));
+    expect(message).toContain('Pro');
+    expect(message).toMatch(/nothing was charged again/i);
+  });
+
+  it('includes the renewal date when the period end is known', () => {
+    const periodEnd = Date.UTC(2026, 9, 25);
+    const message = reconciledMessage(checkout({ planId: 'individual', periodEnd }));
+    expect(message).toContain('Individual');
+    expect(message).toContain(new Date(periodEnd).toLocaleDateString());
+  });
+
+  it('falls back to a generic name for an unknown plan', () => {
+    expect(reconciledMessage(checkout({ planId: null }))).toMatch(/nothing was charged again/i);
   });
 });

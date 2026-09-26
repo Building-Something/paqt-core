@@ -152,9 +152,16 @@ export interface RazorpayCheckout {
   email: string | null;
   /** True when the checkout renewed/upgraded an existing subscription (no payment modal). */
   switched?: boolean;
+  /**
+   * True when the profile mirror had drifted from Razorpay and was rebuilt from
+   * the customer's existing, already-paid subscription. Nothing was charged.
+   */
+  reconciled?: boolean;
+  planId?: string | null;
+  periodEnd?: number | null;
 }
 
-export type CheckoutOutcome = 'completed' | 'dismissed';
+export type CheckoutOutcome = 'completed' | 'dismissed' | 'reconciled';
 
 export interface SubscriptionInfo {
   hasSubscription: boolean;
@@ -164,6 +171,8 @@ export interface SubscriptionInfo {
   periodEnd: number | null;
   subscriptionId: string | null;
   cancelsAtPeriodEnd?: boolean;
+  /** True when this read rebuilt the profile mirror from Razorpay. */
+  reconciled?: boolean;
 }
 
 interface RazorpayOptions {
@@ -234,6 +243,9 @@ export async function beginCheckout(
       name: typeof body.name === 'string' ? body.name : null,
       email: typeof body.email === 'string' ? body.email : null,
       switched: true,
+      reconciled: body.reconciled === true,
+      planId: typeof body.plan_id === 'string' ? body.plan_id : null,
+      periodEnd: typeof body.period_end === 'number' ? body.period_end : null,
     };
   }
   if (typeof body.key_id !== 'string' || typeof body.subscription_id !== 'string') {
@@ -283,13 +295,15 @@ function loadRazorpayScript(): Promise<void> {
 
 /**
  * Opens the Razorpay Checkout modal for a subscription and resolves with
- * 'completed' when the first payment succeeds, 'dismissed' otherwise.
+ * 'completed' when the first payment succeeds, 'reconciled' when the customer
+ * already had a paid subscription that Paqt had lost track of (nothing was
+ * charged), and 'dismissed' otherwise.
  */
 export async function openRazorpayCheckout(
   checkout: RazorpayCheckout,
 ): Promise<CheckoutOutcome> {
   if (checkout.switched) {
-    return 'completed';
+    return checkout.reconciled ? 'reconciled' : 'completed';
   }
   await loadRazorpayScript();
   const Checkout = window.Razorpay;
@@ -325,10 +339,17 @@ function normalizeSubscriptionInfo(body: Record<string, unknown>): SubscriptionI
     periodEnd: typeof body.period_end === 'number' ? body.period_end : null,
     subscriptionId: typeof body.subscription_id === 'string' ? body.subscription_id : null,
     cancelsAtPeriodEnd: body.cancels_at_period_end === true,
+    reconciled: body.reconciled === true,
   };
 }
 
-/** Reads the current subscription state (Razorpay has no hosted billing portal). */
+/**
+ * Reads the current subscription state (Razorpay has no hosted billing portal).
+ *
+ * This is not a passive read: the edge function first reconciles the profile
+ * mirror against Razorpay, so a missed `subscription.activated` webhook heals
+ * here instead of leaving the customer with a paid-but-inert subscription.
+ */
 export async function manageSubscription(): Promise<SubscriptionInfo> {
   return normalizeSubscriptionInfo(
     await callBillingEdge('subscription-manage', { action: 'status' }),
@@ -342,8 +363,21 @@ export async function cancelSubscription(): Promise<SubscriptionInfo> {
   );
 }
 
-export const PLANS = [
-  {
+/**
+ * Explains a checkout that resolved as 'reconciled': Paqt had lost track of a
+ * subscription the customer had already paid for, rebuilt it from Razorpay, and
+ * deliberately did NOT take a second payment.
+ */
+export function reconciledMessage(checkout: RazorpayCheckout): string {
+  const plan = PLANS.find((entry) => entry.id === checkout.planId);
+  const name = plan?.name ?? 'subscription';
+  const renewedOn = checkout.periodEnd
+    ? ` Your ${name} plan is active and renews on ${new Date(checkout.periodEnd).toLocaleDateString()}.`
+    : ` Your ${name} plan is now active.`;
+  return `We already had your ${name} payment on file, so nothing was charged again.${renewedOn}`;
+}
+
+export const PLANS = [  {
     id: 'individual',
     name: 'Individual',
     price: 2999,

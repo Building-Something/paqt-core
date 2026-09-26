@@ -3,9 +3,20 @@ import {
   createAdmin,
   jsonError,
   ms,
-  razorpay,
+  isBillingSubscription,
+  listSubscriptions,
+  reconcileProfileFromRazorpay,
   razorpayCancel,
 } from '../_shared/razorpay.ts';
+
+interface ProfileRow {
+  plan_id: string | null;
+  subscription_status: string;
+  subscription_id: string | null;
+  payment_customer_id: string | null;
+  period_start: number | null;
+  period_end: number | null;
+}
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -26,6 +37,12 @@ Deno.serve(async (req) => {
   }
   const userId = userData.user.id;
 
+  // The profile is a mirror of Razorpay written by the subscription.activated
+  // webhook. Before answering anything about billing, bring the mirror back in
+  // line with the payment provider: a missed webhook (unregistered endpoint,
+  // failed signature check, unmapped plan) would otherwise make this endpoint —
+  // the one place the user is told to go to fix their billing — report "no
+  // subscription" for a subscription that is live and already paid for.
   const { data: profileRows } = await admin
     .from('profiles')
     .select(
@@ -34,16 +51,15 @@ Deno.serve(async (req) => {
     .eq('user_id', userId)
     .maybeSingle();
 
-  const profile = profileRows as
-    | {
-        plan_id: string | null;
-        subscription_status: string;
-        subscription_id: string | null;
-        payment_customer_id: string | null;
-        period_start: number | null;
-        period_end: number | null;
-      }
-    | null;
+  let profile: ProfileRow | null = profileRows as ProfileRow | null;
+
+  const reconciled = await reconcileProfileFromRazorpay(admin, {
+    userId,
+    customerId: profile?.payment_customer_id ?? null,
+  });
+  if (reconciled.repaired && reconciled.profile) {
+    profile = { ...profile, ...reconciled.profile };
+  }
 
   let body: { action?: unknown } = {};
   try {
@@ -56,29 +72,21 @@ Deno.serve(async (req) => {
   if (action === 'cancel') {
     let subscriptionId = profile?.subscription_id ?? null;
     if (!subscriptionId && profile?.payment_customer_id) {
-      // The stored subscription id may not be mirrored yet (webhook lag). Look
-      // up the live subscription from Razorpay so cancellation never spuriously
-      // fails with no_subscription while a subscription actually exists.
-      try {
-        const response = await razorpay.subscriptions.all({ count: 100 });
-        const items = (response.items as Array<{ id: string; status?: string; customer_id?: string }>) ?? [];
-        const live = items.find(
-          (item) =>
-            item.customer_id === profile.payment_customer_id &&
-            ['active', 'authenticated'].includes(item.status ?? ''),
-        );
-        subscriptionId = live?.id ?? null;
-      } catch (err) {
-        console.error(
-          '[subscription-manage] could not look up subscriptions for customer:',
-          (err as Error)?.message,
-        );
-      }
+      // The stored subscription id may not be mirrored yet (webhook lag, or a
+      // checkout that was never activated). Look up the live subscription from
+      // Razorpay so cancellation never spuriously fails with no_subscription
+      // while a subscription actually exists. The shared lister paginates and
+      // anchors on the tracked id, so a churn-heavy customer is not missed by
+      // a single 100-item page.
+      const live = (await listSubscriptions(profile.payment_customer_id, null)).find(
+        isBillingSubscription,
+      );
+      subscriptionId = live?.id ?? null;
     }
     if (!subscriptionId) {
       return jsonError(409, 'no_subscription', 'You have no active subscription.');
     }
-    let subscription: Awaited<ReturnType<typeof razorpay.subscriptions.cancel>>;
+    let subscription: { current_end?: number };
     try {
       // Immediate cancel, THEN residual access is granted from the profile's
       // period_end. Cancel-at-cycle-end must not be used: Razorpay silently
@@ -106,17 +114,25 @@ Deno.serve(async (req) => {
     // is just the full scheduled term and must not become a paid boundary.
     // If the profile already carries a paid-through period_end (the previous
     // subscription's residual access, e.g. a Pro period ending Oct 25), keep
-    // it exactly as-is; do not wipe it to null.
-    const finalPeriodEnd = periodEndMs ?? profile?.period_end ?? null;
+    // it exactly as-is.
+    const paidThrough = periodEndMs ?? profile?.period_end ?? null;
 
-    // Mirror the scheduled cancellation so the UI can switch from "Cancel" to
-    // plan options right away, without waiting for the subscription.cancelled
-    // webhook to land.
+    // Only a genuinely paid period earns the `canceling` state. Marking a
+    // never-billed subscription as `canceling` used to produce the worst
+    // possible profile: `paqt_consume` accepts 'canceling' as live, so the UI
+    // read the plan as active, but with no plan_id and no period_end it had
+    // nothing to show and (being "active") rendered no cancel button — another
+    // dead end. Nothing was ever taken, so `canceled` is the honest state.
+    const keepsAccess = paidThrough != null && paidThrough > Date.now() + 60_000;
+
+    // Mirror the cancellation so the UI can switch from "Cancel" to plan options
+    // right away, without waiting for the subscription.cancelled webhook.
     const { error: mirrorError } = await admin
       .from('profiles')
       .update({
-        subscription_status: 'canceling',
-        period_end: finalPeriodEnd,
+        subscription_status: keepsAccess ? 'canceling' : 'canceled',
+        period_end: paidThrough,
+        ...(keepsAccess ? {} : { plan_id: null, period_start: null }),
         updated_at: Date.now(),
       })
       .eq('user_id', userId);
@@ -133,12 +149,12 @@ Deno.serve(async (req) => {
 
     return new Response(
       JSON.stringify({
-        has_subscription: true,
+        has_subscription: keepsAccess,
         subscription_id: subscriptionId,
-        status: profile?.subscription_status ?? 'none',
-        plan_id: profile?.plan_id ?? null,
-        period_end: finalPeriodEnd,
-        cancels_at_period_end: true,
+        status: keepsAccess ? 'canceling' : 'canceled',
+        plan_id: keepsAccess ? (profile?.plan_id ?? null) : null,
+        period_end: paidThrough,
+        cancels_at_period_end: keepsAccess,
       }),
       { headers: { 'Content-Type': 'application/json', ...corsHeaders() } },
     );
@@ -154,6 +170,9 @@ Deno.serve(async (req) => {
       period_start: profile?.period_start ?? null,
       period_end: profile?.period_end ?? null,
       subscription_id: profile?.subscription_id ?? null,
+      // Surfaced so the client can tell the user their billing state was
+      // rebuilt from Razorpay rather than read from a stale mirror.
+      reconciled: reconciled.repaired,
     }),
     { headers: { 'Content-Type': 'application/json', ...corsHeaders() } },
   );

@@ -7,7 +7,7 @@ import { Button } from '../components/ui/button';
 import { Card } from '../components/ui/card';
 import { useAuth } from '../contexts/AuthContext';
 import { useEntitlement } from '../contexts/EntitlementContext';
-import { beginCheckout, manageSubscription, openRazorpayCheckout, PLANS, BUSINESS_PLAN, type CheckoutError } from '../services/entitlementService';
+import { beginCheckout, manageSubscription, openRazorpayCheckout, reconciledMessage, PLANS, BUSINESS_PLAN, type CheckoutError } from '../services/entitlementService';
 import { useToast } from '../contexts/ToastContext';
 
 const EVERYTHING_INCLUDED = [
@@ -53,7 +53,7 @@ function BusinessBlock() {
 
 export function PricingPage() {
   const { session } = useAuth();
-  const { usage } = useEntitlement();
+  const { usage, refresh } = useEntitlement();
   const { toast } = useToast();
   const navigate = useNavigate();
   const [busyPlan, setBusyPlan] = useState<string | null>(null);
@@ -65,6 +65,13 @@ export function PricingPage() {
     try {
       const checkout = await beginCheckout(planId);
       const outcome = await openRazorpayCheckout(checkout);
+      if (outcome === 'reconciled') {
+        // Paqt had lost track of a subscription that was already paid for and
+        // rebuilt it from Razorpay. Nothing was charged, so say so.
+        toast('info', reconciledMessage(checkout));
+        await refresh();
+        return;
+      }
       if (outcome === 'completed') {
         window.location.assign('/settings?checkout=success');
       }

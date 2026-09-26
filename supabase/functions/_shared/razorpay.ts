@@ -135,6 +135,242 @@ export async function razorpayCancel(subscriptionId) {
   const { data } = await admin.from('plans').select('id').eq('price_id', priceId).maybeSingle();
   return data?.id ?? null;
 }
+export interface SubscriptionEntity {
+  id?: string;
+  status?: string;
+  created_at?: number;
+  plan_id?: string;
+  customer_id?: string;
+  start_at?: number;
+  current_start?: number | null;
+  current_end?: number | null;
+  end_at?: number | null;
+  charge_at?: number | null;
+  has_scheduled_changes?: boolean;
+  notes?: Record<string, string>;
+}
+/** Razorpay statuses that mean the subscription is live and billing. */
+const BILLING_SUB_STATUSES = new Set(['active', 'charging', 'paid', 'pending']);
+/** Profile statuses that already hand out paid access. */
+const LIVE_PROFILE_STATUSES = new Set(['active', 'trialing', 'canceling']);
+/** True when the subscription is live and billing on Razorpay. */
+export function isBillingSubscription(sub: SubscriptionEntity): boolean {
+  return Boolean(sub.id && sub.status && BILLING_SUB_STATUSES.has(sub.status));
+}
+/** True when the subscription has actually entered a billing cycle (money taken). */
+export function hasStartedCycle(sub: SubscriptionEntity): boolean {
+  return typeof sub.current_start === 'number' && sub.current_start > 0;
+}
+/**
+ * Lists a customer's subscriptions. Razorpay's list endpoint has no customer
+ * filter, so we list recent subscriptions and filter client-side. The
+ * subscription the profile currently tracks is fetched by id separately — it
+ * is the authoritative anchor and must be found no matter how many older
+ * (mostly cancelled) subscriptions preceded it, so a churn-heavy customer is
+ * never missed by a pagination limit. Pagination uses the documented `skip`
+ * cursor (the list API only accepts `skip`/`count`; `from`/`to` are Unix
+ * timestamps and there is no id cursor). Returns an empty list on any failure
+ * so checkout never fails over a listing hiccup.
+ */
+export async function listSubscriptions(
+  customerId: string,
+  trackedId?: string | null,
+): Promise<SubscriptionEntity[]> {
+  try {
+    const seen = new Map<string, SubscriptionEntity>();
+    const add = (sub?: SubscriptionEntity | null): void => {
+      if (sub && sub.id && sub.customer_id === customerId) {
+        seen.set(sub.id, sub);
+      }
+    };
+
+    if (trackedId) {
+      try {
+        add(await razorpay.subscriptions.fetch(trackedId));
+      } catch {
+        // The tracked sub may no longer exist on Razorpay (e.g. an interrupted
+        // upgrade left a stale id); the list below still covers it if present.
+      }
+    }
+
+    for (let skip = 0; skip < 500; skip += 100) {
+      const page = await razorpay.subscriptions.all({ count: 100, skip });
+      const pageItems = (page.items as SubscriptionEntity[]) ?? [];
+      for (const sub of pageItems) add(sub);
+      if (pageItems.length < 100) break;
+    }
+
+    return Array.from(seen.values());
+  } catch (err) {
+    const detail = (err as Error)?.message ?? 'unknown error';
+    console.error('[razorpay] could not list subscriptions:', detail);
+    return [];
+  }
+}
+/**
+ * Picks the subscription a customer has actually paid for: live, already into
+ * a billing cycle, and paid through to a future boundary. The most recent
+ * cycle wins (that is the one they last paid for); ties break on the
+ * furthest-paid boundary.
+ */
+export function pickPaidSubscription(items: SubscriptionEntity[]): SubscriptionEntity | null {
+  const nowSec = Math.floor(Date.now() / 1000);
+  const paid = items.filter(
+    (sub) =>
+      isBillingSubscription(sub) &&
+      hasStartedCycle(sub) &&
+      typeof sub.current_end === 'number' &&
+      sub.current_end > nowSec,
+  );
+  if (paid.length === 0) {
+    return null;
+  }
+  return paid.reduce((best, sub) => {
+    const startDelta = (sub.current_start ?? 0) - (best.current_start ?? 0);
+    if (startDelta !== 0) {
+      return startDelta > 0 ? sub : best;
+    }
+    return (sub.current_end ?? 0) > (best.current_end ?? 0) ? sub : best;
+  });
+}
+function toMsNumber(value: unknown): number | null {
+  if (typeof value === 'bigint') {
+    return Number(value);
+  }
+  if (typeof value === 'number') {
+    return value;
+  }
+  return null;
+}
+export interface ProfileSnapshot {
+  plan_id: string | null;
+  subscription_status: string;
+  subscription_id: string | null;
+  period_start: number | null;
+  period_end: number | null;
+}
+export interface ReconcileResult {
+  /** True when the profile was rewritten from the live Razorpay subscription. */
+  repaired: boolean;
+  reason:
+    | 'in_sync'
+    | 'canceling'
+    | 'no_customer'
+    | 'no_paid_subscription'
+    | 'unmapped_plan'
+    | 'no_paid_period'
+    | 'db_write_failed'
+    | 'repaired_from_razorpay';
+  profile: ProfileSnapshot | null;
+}
+/**
+ * Repairs a `profiles` row that has drifted from Razorpay.
+ *
+ * The profile mirror is written ONLY by the subscription.activated/charged
+ * webhook. If that webhook is unregistered, its signature check fails, or the
+ * plan→price mapping is missing, a customer who has genuinely paid is left
+ * with `subscription_status = 'none'`, `plan_id = null` and no billing period
+ * — i.e. a live, billed subscription that grants no access. Nothing in the
+ * system noticed, because every read path trusted the profile.
+ *
+ * This walks Razorpay and rebuilds the mirror from the authoritative record, so
+ * a missed webhook heals on the next checkout or billing-page read instead of
+ * stranding the customer. It is deliberately conservative: it only ever
+ * *grants* access that Razorpay proves was paid for, and it never resurrects a
+ * subscription the customer cancelled (the `canceling` state is an explicit
+ * decision that only the webhook may undo).
+ */
+export async function reconcileProfileFromRazorpay(
+  admin: ReturnType<typeof createAdmin>,
+  options: { userId: string; customerId: string | null },
+): Promise<ReconcileResult> {
+  const { userId, customerId } = options;
+  const { data } = await admin
+    .from('profiles')
+    .select('plan_id, subscription_status, subscription_id, payment_customer_id, period_start, period_end')
+    .eq('user_id', userId)
+    .maybeSingle();
+  const row = (data ?? null) as Record<string, unknown> | null;
+
+  const snapshot = (): ProfileSnapshot => ({
+    plan_id: (row?.plan_id as string | null) ?? null,
+    subscription_status: (row?.subscription_status as string) ?? 'none',
+    subscription_id: (row?.subscription_id as string | null) ?? null,
+    period_start: toMsNumber(row?.period_start),
+    period_end: toMsNumber(row?.period_end),
+  });
+
+  const status = (row?.subscription_status as string) ?? 'none';
+  const periodEnd = toMsNumber(row?.period_end);
+
+  // Cancelled-at-cycle-end is an explicit decision (the customer or a webhook
+  // asked for it). Reconciling must never flip it back to `active`; only a real
+  // renewal event may.
+  if (status === 'canceling') {
+    return { repaired: false, reason: 'canceling', profile: snapshot() };
+  }
+
+  // Already granting access through a paid period — nothing to repair.
+  if (row?.plan_id && LIVE_PROFILE_STATUSES.has(status) && periodEnd != null && periodEnd > Date.now()) {
+    return { repaired: false, reason: 'in_sync', profile: snapshot() };
+  }
+
+  if (!customerId) {
+    return { repaired: false, reason: 'no_customer', profile: snapshot() };
+  }
+
+  const candidate = pickPaidSubscription(
+    await listSubscriptions(customerId, (row?.subscription_id as string | null) ?? null),
+  );
+  if (!candidate?.id) {
+    return { repaired: false, reason: 'no_paid_subscription', profile: snapshot() };
+  }
+
+  const planId = await planIdForPrice(admin, candidate.plan_id ?? '');
+  if (!planId) {
+    console.error(
+      `[razorpay] cannot reconcile ${candidate.id}: razorpay plan ${candidate.plan_id} has no Paqt plan mapping`,
+    );
+    return { repaired: false, reason: 'unmapped_plan', profile: snapshot() };
+  }
+
+  const period = periodFromSubscription(candidate);
+  const periodStart = toMsNumber(period.start);
+  const periodEndMs = toMsNumber(period.end);
+  if (periodStart == null || periodEndMs == null || periodEndMs <= Date.now()) {
+    return { repaired: false, reason: 'no_paid_period', profile: snapshot() };
+  }
+
+  const { error } = await admin.from('profiles').upsert(
+    {
+      user_id: userId,
+      plan_id: planId,
+      subscription_status: 'active',
+      subscription_id: candidate.id,
+      payment_customer_id: customerId,
+      period_start: periodStart,
+      period_end: periodEndMs,
+      updated_at: Date.now(),
+    },
+    { onConflict: 'user_id' },
+  );
+  if (error) {
+    console.error('[razorpay] could not repair drifted profile:', error.message);
+    return { repaired: false, reason: 'db_write_failed', profile: snapshot() };
+  }
+
+  return {
+    repaired: true,
+    reason: 'repaired_from_razorpay',
+    profile: {
+      plan_id: planId,
+      subscription_status: 'active',
+      subscription_id: candidate.id,
+      period_start: periodStart,
+      period_end: periodEndMs,
+    },
+  };
+}
 /** Reads the current billing period from a Razorpay subscription entity. */ export function periodFromSubscription(subscription) {
   return {
     start: ms(subscription.current_start ?? null),

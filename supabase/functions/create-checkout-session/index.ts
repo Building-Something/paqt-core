@@ -9,6 +9,11 @@ import {
   razorpayCancelScheduledChanges,
   razorpayChangePlan,
   razorpayResume,
+  reconcileProfileFromRazorpay,
+  listSubscriptions,
+  isBillingSubscription,
+  hasStartedCycle,
+  type SubscriptionEntity,
 } from '../_shared/razorpay.ts';
 
 const KEY_ID = Deno.env.get('RAZORPAY_KEY_ID') ?? '';
@@ -43,74 +48,29 @@ async function mirrorSubscription(
   }
 }
 
-type SubscriptionEntity = {
-  id?: string;
-  status?: string;
-  created_at?: number;
-  plan_id?: string;
-  customer_id?: string;
-  start_at?: number;
-};
-
 /**
- * Lists a customer's subscriptions. Razorpay's list endpoint has no customer
- * filter, so we list recent subscriptions and filter client-side. The
- * subscription the profile currently tracks is fetched by id separately — it
- * is the authoritative anchor and must be found no matter how many older
- * (mostly cancelled) subscriptions preceded it, so a churn-heavy customer is
- * never missed by a pagination limit. Pagination uses the documented `skip`
- * cursor (the list API only accepts `skip`/`count`; `from`/`to` are Unix
- * timestamps and there is no id cursor). Returns an empty list on any failure
- * so checkout never fails over a listing hiccup.
- */
-async function listSubscriptions(
-  customerId: string,
-  trackedId?: string | null,
-): Promise<SubscriptionEntity[]> {
-  try {
-    const seen = new Map<string, SubscriptionEntity>();
-    const add = (sub?: SubscriptionEntity | null): void => {
-      if (sub && sub.id && sub.customer_id === customerId) {
-        seen.set(sub.id, sub);
-      }
-    };
-
-    if (trackedId) {
-      try {
-        add(await razorpay.subscriptions.fetch(trackedId));
-      } catch {
-        // The tracked sub may no longer exist on Razorpay (e.g. an interrupted
-        // upgrade left a stale id); the list below still covers it if present.
-      }
-    }
-
-    for (let skip = 0; skip < 500; skip += 100) {
-      const page = await razorpay.subscriptions.all({ count: 100, skip });
-      const pageItems = (page.items as SubscriptionEntity[]) ?? [];
-      for (const sub of pageItems) add(sub);
-      if (pageItems.length < 100) break;
-    }
-
-    return Array.from(seen.values());
-  } catch (err) {
-    const detail = (err as Error)?.message ?? 'unknown error';
-    console.error('[create-checkout-session] could not list subscriptions:', detail);
-    return [];
-  }
-}
-
-/**
- * Cancels stale "created" subscriptions (abandoned checkouts) older than ten
- * minutes so they stop piling up and emailing payment reminders. Subs whose
- * start_at is still in the future are deliberately upcoming (start_at set for
- * a renew/upgrade) and must not be swept up here.
+ * Cancels abandoned, never-billed checkout subscriptions older than ten minutes
+ * so they stop piling up, emailing payment reminders, and — the bug this fixes —
+ * blocking the customer from ever starting a real one.
+ *
+ * Two statuses are abandoned: 'created' (the modal was opened but never paid)
+ * and 'authenticated' (a payment method was authorised but the first charge
+ * never landed). Both grant no access, so both are safe to sweep once we are
+ * certain no money is coming: a future `start_at` means the subscription is
+ * deliberately upcoming (a renew/upgrade booking), and a future `charge_at`
+ * means Razorpay still intends to bill it. Neither is touched.
  */
 async function cancelStaleCreated(items: SubscriptionEntity[]): Promise<void> {
   const nowSec = Math.floor(Date.now() / 1000);
   for (const sub of items) {
-    if (sub.status !== 'created') continue;
+    const abandoned =
+      sub.status === 'created' ||
+      (sub.status === 'authenticated' && !hasStartedCycle(sub));
+    if (!abandoned) continue;
     const isUpcoming = typeof sub.start_at === 'number' && sub.start_at > nowSec;
     if (isUpcoming) continue;
+    const hasPendingCharge = typeof sub.charge_at === 'number' && sub.charge_at > nowSec;
+    if (hasPendingCharge) continue;
     if (
       typeof sub.created_at === 'number' &&
       nowSec - sub.created_at > 10 * 60 &&
@@ -575,9 +535,47 @@ Deno.serve(async (req) => {
       );
     }
 
-    // A genuinely active subscription (not scheduled to cancel) blocks a new
-    // one — there is no legitimate reason to hold two at once.
-    if (active?.id) {
+    // A live subscription on Razorpay blocks a *new* one — there is no
+    // legitimate reason to hold two at once. "Live" means actually billing: an
+    // 'authenticated' subscription whose first charge never landed grants no
+    // access and takes no money, so it must not stand between the customer and
+    // a real purchase (cancelStaleCreated sweeps it shortly afterwards).
+    //
+    // The profile, though, is only a mirror, and the only writer that grants
+    // access is the subscription.activated webhook. If that webhook is
+    // unregistered, its signature check failed, or the plan→price mapping is
+    // missing, a customer who has genuinely PAID ends up with a live, billing
+    // subscription that Paqt does not know about: status 'none', no plan, no
+    // period. That was exactly the state the 409 below used to report — and its
+    // only escape was "cancel it from Plan & billing in Settings", a button
+    // that PlanUsageCard only renders while a plan is already active, i.e.
+    // never in the desynced state. The customer was permanently stuck, holding
+    // a receipt and no access.
+    //
+    // So: repair the mirror from the live subscription first, and only report
+    // the conflict when the profile really does already hold a paid plan.
+    if (active?.id && isBillingSubscription(active)) {
+      const reconciled = await reconcileProfileFromRazorpay(admin, { userId, customerId });
+      if (reconciled.repaired) {
+        console.warn(
+          '[create-checkout-session] profile had drifted from Razorpay; repaired from the live paid subscription',
+          active.id,
+        );
+        // No new subscription and no new charge: the customer already paid for
+        // this. `reconciled` tells the client to say so instead of pretending a
+        // fresh payment happened.
+        return new Response(
+          JSON.stringify({
+            switched: true,
+            reconciled: true,
+            key_id: KEY_ID,
+            subscription_id: active.id,
+            plan_id: reconciled.profile?.plan_id ?? null,
+            period_end: reconciled.profile?.period_end ?? null,
+          }),
+          { headers: { 'Content-Type': 'application/json', ...corsHeaders() } },
+        );
+      }
       return jsonError(
         409,
         'active_subscription_exists',
