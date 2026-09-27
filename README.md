@@ -124,6 +124,11 @@ Setup:
    supabase functions deploy subscription-manage --no-verify-jwt
    supabase functions deploy razorpay-webhook --no-verify-jwt
    ```
+   Or run all of the above in one go: copy `.billing-env.example` to `.billing-env`, fill in your
+   Razorpay keys, a `SUPABASE_ACCESS_TOKEN` (Dashboard → Account → Access Tokens), and the project
+   ref, then `node scripts/setup-billing.mjs`. It ensures the two plans exist via the Razorpay API,
+   writes `supabase/set-plan-price-ids.sql`, then links the project, sets the secrets, and deploys
+   the three functions.
 4. **Wire the webhook.** Razorpay Dashboard → Settings → Webhooks → add `https://<project-ref>.supabase.co/functions/v1/razorpay-webhook` with the secret above, subscribing to `subscription.activated/charged/resumed/updated/pending/completed/cancelled/paused/halted` and `payment.authorized/captured/failed/refunded` + `refund.processed`. The handler verifies the HMAC-SHA256 signature and re-fetches the authoritative Razorpay subscription on every event, so state never depends on a specific payload shape.
 5. **Enable server-side enforcement** (optional but recommended). Add to `.env`:
    ```

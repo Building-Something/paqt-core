@@ -1,0 +1,12 @@
+# Copy to .billing-env (never commit that file) and fill in. Used by scripts/setup-billing.mjs
+# to create Razorpay plans, write the price_id SQL, and deploy everything to Supabase.
+
+RAZORPAY_KEY_ID=rzp_test_...
+RAZORPAY_KEY_SECRET=...
+# Any string is fine to start (paired with the Razorpay webhook secret you register).
+RAZORPAY_WEBHOOK_SECRET=...
+
+# Supabase CLI access token (sbp_...) from https://supabase.com/dashboard/account/tokens
+SUPABASE_ACCESS_TOKEN=
+# From Project Settings > General
+SUPABASE_PROJECT_REF=ijiogpflpicpyjbvanik
