@@ -17,7 +17,6 @@ import {
   hasAutopay,
   hasPendingChange,
   pendingPlanId,
-  resumeSubscription,
   type PlanStatus,
 } from '../services/billingService';
 
@@ -70,26 +69,6 @@ export function BillingSettings() {
       await refresh();
     } catch (error) {
       toast('error', error instanceof Error ? error.message : 'Could not cancel the subscription.');
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleResume() {
-    if (!sub) {
-      return;
-    }
-    setBusy(true);
-    try {
-      const result = await resumeSubscription(supabase!);
-      if (result.ok) {
-        toast('success', result.message ?? 'Auto-renew is back on.');
-      } else {
-        toast('error', 'Could not re-enable auto-renew.');
-      }
-      await refresh();
-    } catch (error) {
-      toast('error', error instanceof Error ? error.message : 'Could not update your plan.');
     } finally {
       setBusy(false);
     }
@@ -218,9 +197,12 @@ export function BillingSettings() {
                   </div>
                   <Badge variant="outline">Off</Badge>
                 </div>
-                <Button size="sm" className="mt-3" onClick={() => void handleResume()} disabled={busy}>
-                  {busy ? <Spinner className="size-4" /> : null}
-                  {busy ? 'Working…' : 'Re-enable auto-renew'}
+                <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+                  Cancelling is final — auto-renew stays off. To keep using Paqt afterwards, pick
+                  a plan and pay again; a new subscription starts with auto-renew on by default.
+                </p>
+                <Button size="sm" className="mt-3" asChild>
+                  <Link to="/pricing">Choose a plan &amp; pay again</Link>
                 </Button>
               </div>
             )

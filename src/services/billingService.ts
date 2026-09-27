@@ -68,6 +68,7 @@ const ACCESS_STATES = ['active'] as const;
  * access exactly when their row is `active` and the running cycle has not
  * ended. A short grace period absorbs webhook timing, never more.
  */
+/** True while the user's current paid period is running. */
 export function hasActivePlan(sub: PaqtSubscription | null | undefined, nowMs = Date.now()): boolean {
   if (!sub) {
     return false;
@@ -80,6 +81,18 @@ export function hasActivePlan(sub: PaqtSubscription | null | undefined, nowMs = 
     return false;
   }
   return nowMs <= periodEndMs + PLAN_GRACE_MS;
+}
+
+/**
+ * True when the user's active plan still renews automatically today (auto-renew
+ * not cancelled). Auto-renew-off means resignation: the only path forward is a
+ * brand-new subscription via checkout.
+ */
+export function hasRenewingPlan(
+  sub: PaqtSubscription | null | undefined,
+  nowMs = Date.now(),
+): boolean {
+  return hasActivePlan(sub, nowMs) && (sub?.autopay ?? false);
 }
 
 /** Effective plan for the current billing period (respects scheduled changes). */
@@ -228,10 +241,6 @@ export function startCheckout(client: SupabaseClient, planId: string): Promise<C
 
 export function cancelSubscription(client: SupabaseClient): Promise<ManageResult> {
   return invokeBilling<ManageResult>(client, 'subscription-manage', { action: 'cancel' });
-}
-
-export function resumeSubscription(client: SupabaseClient): Promise<ManageResult> {
-  return invokeBilling<ManageResult>(client, 'subscription-manage', { action: 'resume' });
 }
 
 export function schedulePlanChange(

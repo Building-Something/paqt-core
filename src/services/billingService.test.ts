@@ -6,6 +6,7 @@ import {
   hasActivePlan,
   hasAutopay,
   hasPendingChange,
+  hasRenewingPlan,
   pendingPlanId,
   type PaqtSubscription,
   type PlanStatus,
@@ -87,6 +88,15 @@ describe('plan change helpers', () => {
     expect(hasAutopay(makeSub({ pending_plan_id: 'pro' }))).toBe(false);
     expect(hasAutopay(makeSub({ ends_at: 9999 }))).toBe(false);
     expect(hasAutopay(null)).toBe(false);
+  });
+
+  it('only treats a subscription as renewing while active with auto-renew on', () => {
+    const nowMs = Date.now();
+    expect(hasRenewingPlan(makeSub(), nowMs)).toBe(true);
+    expect(hasRenewingPlan(makeSub({ autopay: false }), nowMs)).toBe(false);
+    expect(hasRenewingPlan(makeSub({ status: 'cancelled' }), nowMs)).toBe(false);
+    expect(hasRenewingPlan(makeSub({ pending_plan_id: 'pro' }), nowMs)).toBe(true);
+    expect(hasRenewingPlan(null, nowMs)).toBe(false);
   });
 });
 

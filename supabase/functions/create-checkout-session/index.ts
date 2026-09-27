@@ -87,16 +87,18 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Never offer a second checkout while the user already has an active plan.
+    // Never offer a second checkout while the user already has a renewing
+    // plan (auto-renew on). If auto-renew was cancelled, the old subscription
+    // only lingers until its paid period ends, so starting a fresh one is fine.
     const { data: activeSub } = await supabase
       .from('subscriptions')
-      .select('razorpay_subscription_id, plan_id, status')
+      .select('razorpay_subscription_id, plan_id, status, autopay')
       .eq('user_id', user.id)
       .in('status', ACTIVE_STATUSES)
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
-    if (activeSub) {
+    if (activeSub && activeSub.autopay !== false) {
       return corsResponse(409, {
         error: {
           code: 'already_active',

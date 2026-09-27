@@ -74,7 +74,7 @@ Deno.serve(async (req) => {
 
     const body = (await req.json().catch(() => null)) as ManageBody | null;
     const action = typeof body?.action === 'string' ? body.action : '';
-    if (!action || !['cancel', 'resume', 'schedule_change'].includes(action)) {
+    if (!action || !['cancel', 'schedule_change'].includes(action)) {
       return corsResponse(400, {
         error: { code: 'bad_request', message: 'Unknown action.' },
       });
@@ -121,32 +121,11 @@ Deno.serve(async (req) => {
     }
 
     if (action === 'resume') {
-      if (sub.status !== 'active') {
-        return corsResponse(409, {
-          error: { code: 'invalid_state', message: 'Only an active subscription can be re-enabled.' },
-        });
-      }
-      const entity = await razorpayJson<RazorpaySubscriptionEntity>(
-        `/subscriptions/${subscriptionId}/resume`,
-        { method: 'POST' },
-      );
-      const { error } = await supabase
-        .from('subscriptions')
-        .update({
-          status: entity.status,
-          autopay: true,
-          ends_at: null,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('razorpay_subscription_id', subscriptionId);
-      if (error) {
-        throw error;
-      }
-      return corsResponse(200, {
-        ok: true,
-        status: entity.status,
-        autopay: true,
-        message: 'Automatic renewal is back on.',
+      return corsResponse(400, {
+        error: {
+          code: 'bad_request',
+          message: 'A cancelled subscription cannot re-enable auto-renew. Subscribe again instead.',
+        },
       });
     }
 

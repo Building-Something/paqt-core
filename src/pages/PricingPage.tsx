@@ -12,9 +12,11 @@ import {
   formatMonthDay,
   hasActivePlan,
   hasPendingChange,
+  hasRenewingPlan,
   schedulePlanChange,
   startCheckout,
 } from '../services/billingService';
+import { openSubscriptionCheckout } from '../services/razorpayCheckout';
 
 export function PricingPage() {
   const { session } = useAuth();
@@ -38,7 +40,7 @@ export function PricingPage() {
     }
     setBusyPlanId(planId);
     try {
-      if (active) {
+      if (hasRenewingPlan(sub)) {
         const result = await schedulePlanChange(supabase, planId);
         if (result.ok) {
           toast('success', result.message ?? 'Plan change scheduled.');
@@ -47,15 +49,25 @@ export function PricingPage() {
         }
       } else {
         const checkout = await startCheckout(supabase, planId);
-        if (checkout.shortUrl) {
-          window.open(checkout.shortUrl, '_blank', 'noopener,noreferrer');
-          toast(
-            'info',
-            'Payment opened in a new tab. Complete it there — your plan activates automatically.',
-            9000,
-          );
+        if (!checkout.key || !checkout.subscriptionId) {
+          throw new Error('Could not start checkout. Please try again.');
+        }
+        const plan = plans.find((candidate) => candidate.id === planId);
+        const outcome = await openSubscriptionCheckout({
+          key: checkout.key,
+          subscriptionId: checkout.subscriptionId,
+          name: 'Paqt',
+          description: plan ? `${plan.name} plan` : 'Paqt subscription',
+          prefillName:
+            typeof session.user.user_metadata?.full_name === 'string'
+              ? session.user.user_metadata.full_name
+              : undefined,
+          prefillEmail: session.user.email ?? undefined,
+        });
+        if (outcome === 'paid') {
+          toast('success', 'Payment received — your plan is activating.');
         } else {
-          toast('error', 'Could not start checkout. Please try again.');
+          toast('info', 'Checkout closed. You can pay anytime from here.');
         }
       }
       await refresh();
