@@ -49,12 +49,12 @@ export function BillingSettings() {
   const active = hasActivePlan(sub);
   const autopayOn = hasAutopay(sub);
 
-  async function handleCancelAutopay() {
+  async function handleCancelSubscription() {
     if (!sub) {
       return;
     }
     const confirmed = window.confirm(
-      'Turn off automatic renewal? You keep access until the end of your current billing period, then your plan ends.',
+      'Cancel subscription?\n\nYour auto-renew is switched off. You keep full access until the end of the period you already paid for, then the plan ends.',
     );
     if (!confirmed) {
       return;
@@ -63,13 +63,13 @@ export function BillingSettings() {
     try {
       const result = await cancelSubscription(supabase!);
       if (result.ok) {
-        toast('success', result.message ?? 'Automatic renewal is now off.');
+        toast('success', result.message ?? 'Subscription cancelled. Auto-renew is off.');
       } else {
-        toast('error', 'Could not turn off renewal.');
+        toast('error', 'Could not cancel the subscription.');
       }
       await refresh();
     } catch (error) {
-      toast('error', error instanceof Error ? error.message : 'Could not update your plan.');
+      toast('error', error instanceof Error ? error.message : 'Could not cancel the subscription.');
     } finally {
       setBusy(false);
     }
@@ -83,9 +83,9 @@ export function BillingSettings() {
     try {
       const result = await resumeSubscription(supabase!);
       if (result.ok) {
-        toast('success', result.message ?? 'Automatic renewal is back on.');
+        toast('success', result.message ?? 'Auto-renew is back on.');
       } else {
-        toast('error', 'Could not re-enable renewal.');
+        toast('error', 'Could not re-enable auto-renew.');
       }
       await refresh();
     } catch (error) {
@@ -136,7 +136,7 @@ export function BillingSettings() {
                 {active ? (
                   <>
                     Current period ends {formatMonthDay(sub.current_period_end) ?? 'soon'}
-                    {autopayOn ? ` · renews automatically` : ` · renewal is off`}
+                    {autopayOn ? ` · auto-renew is on` : ` · auto-renew is off`}
                   </>
                 ) : (
                   <>
@@ -163,42 +163,74 @@ export function BillingSettings() {
               <RefreshCcw className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" />
               <p className="text-muted-foreground">
                 You’re switching to{' '}
-                <span className="font-medium text-foreground">{pendingPlan?.name ?? 'a new plan'}</span>.
-                It takes effect when your current billing period ends.
+                <span className="font-medium text-foreground">
+                  {pendingPlan?.name ?? 'a new plan'}
+                </span>
+                . It takes effect when your current billing period ends.
               </p>
             </div>
           ) : null}
 
-          <div className="flex flex-wrap items-center gap-3">
-            {active ? (
-              autopayOn ? (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => void handleCancelAutopay()}
-                  disabled={busy}
-                >
-                  {busy ? <Spinner className="size-4" /> : null}
-                  {busy ? 'Working…' : 'Turn off auto-renew'}
-                </Button>
-              ) : (
-                <Button size="sm" onClick={() => void handleResume()} disabled={busy}>
-                  {busy ? <Spinner className="size-4" /> : null}
-                  {busy ? 'Working…' : 'Turn auto-renew back on'}
-                </Button>
-              )
+          {active ? (
+            autopayOn ? (
+              <div className="rounded-lg border border-border bg-muted/40 px-4 py-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-medium text-foreground">Auto-renew is on</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      You’ll be charged {plan ? `${formatPriceInr(plan.price_inr)}` : 'the plan price'}/month again on{' '}
+                      {formatMonthDay(sub.current_period_end) ?? 'your next billing date'}.
+                    </p>
+                  </div>
+                  <Badge variant="default">On</Badge>
+                </div>
+                <div className="mt-3">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="text-destructive hover:text-destructive"
+                    onClick={() => void handleCancelSubscription()}
+                    disabled={busy}
+                  >
+                    {busy ? <Spinner className="size-4" /> : null}
+                    {busy ? 'Working…' : 'Cancel subscription'}
+                  </Button>
+                  <p className="mt-2 flex items-start gap-1.5 text-xs leading-relaxed text-muted-foreground">
+                    <ShieldCheck className="mt-0.5 size-3.5 shrink-0 text-primary" aria-hidden="true" />
+                    Cancel stops all future monthly charges. You keep full access until the end of
+                    the period you already paid for, then the plan ends — like Netflix.
+                  </p>
+                </div>
+              </div>
             ) : (
+              <div className="rounded-lg border border-border bg-muted/40 px-4 py-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-medium text-foreground">Auto-renew is off</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      You won’t be charged again. You keep full access until{' '}
+                      {formatMonthDay(sub.current_period_end) ?? 'the end of your paid period'}, then
+                      the plan ends.
+                    </p>
+                  </div>
+                  <Badge variant="outline">Off</Badge>
+                </div>
+                <Button size="sm" className="mt-3" onClick={() => void handleResume()} disabled={busy}>
+                  {busy ? <Spinner className="size-4" /> : null}
+                  {busy ? 'Working…' : 'Re-enable auto-renew'}
+                </Button>
+              </div>
+            )
+          ) : (
+            <div className="flex flex-wrap items-center gap-3">
               <Button size="sm" asChild>
                 <Link to="/pricing">Resubscribe</Link>
               </Button>
-            )}
-          </div>
-
-          <p className="flex items-start gap-2 text-xs leading-relaxed text-muted-foreground">
-            <ShieldCheck className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" />
-            Automatic renewal is on by default. You’ll be charged every month until you cancel; you
-            keep access until the end of the period you already paid for.
-          </p>
+              <p className="text-xs text-muted-foreground">
+                Your plan has ended. Pick a plan again to keep going.
+              </p>
+            </div>
+          )}
         </div>
       ) : (
         <div className="px-5 py-6">
