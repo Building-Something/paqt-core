@@ -1,10 +1,12 @@
 import {
   type Admin,
   type PaqtStatus,
+  RazorpayError,
   type RazorpayPayment,
   type RazorpaySubscription,
   cancelNow,
   fetchSubscription,
+  hasBeenCharged,
   hasPaidPeriod,
   hasStartedCycle,
   isLiveStatus,
@@ -179,7 +181,13 @@ function isTerminalStatus(status: PaqtStatus): boolean {
 export async function applySubscription(admin: Admin, args: ApplySubscriptionArgs): Promise<ApplyResult> {
   const { sub } = args;
   let status = args.overrideStatus ?? mapRazorpayStatus(sub.status);
-  const paidThrough = hasPaidPeriod(sub);
+  // Razorpay fills `current_start`/`current_end` in when a subscription is
+  // created, so the period alone does not prove money moved. Only a status that
+  // proves a charge may be written as a paid period, otherwise an abandoned
+  // checkout would grant access that was never bought.
+  const charged = hasBeenCharged(sub.status);
+  const startedCycle = charged && hasStartedCycle(sub);
+  const paidThrough = charged && hasPaidPeriod(sub);
   // Razorpay cancelled the subscription now, but the customer paid through
   // current_end, so the plan stays until then while no further charge can occur.
   const keepingPeriod = args.keepUntilPeriodEnd === true && paidThrough && status === 'canceled';
@@ -190,7 +198,7 @@ export async function applySubscription(admin: Admin, args: ApplySubscriptionArg
   // While keeping the paid period, the plan does not end when Razorpay's
   // `end_at` (the cancel moment) says it does, but when the period does.
   const endedAt =
-    keepingPeriod && hasStartedCycle(sub)
+    keepingPeriod && startedCycle
       ? ms(sub.current_end ?? null)
       : status === 'canceled' || status === 'completed' || status === 'expired' || canceling
         ? ms(sub.end_at ?? sub.current_end ?? null)
@@ -205,7 +213,7 @@ export async function applySubscription(admin: Admin, args: ApplySubscriptionArg
       status,
       razorpay_status: sub.status ?? null,
       starts_at: ms(sub.start_at ?? null),
-      current_period_start: hasStartedCycle(sub) ? ms(sub.current_start ?? null) : null,
+      current_period_start: startedCycle ? ms(sub.current_start ?? null) : null,
       current_period_end: paidThrough ? ms(sub.current_end ?? null) : null,
       cancel_at_period_end: canceling,
       canceled_at: canceling || status === 'canceled' ? nowMs() : null,
@@ -493,10 +501,32 @@ export async function reconcileTrackedSubscription(
   try {
     sub = await fetchSubscription(args.trackedId);
   } catch (err) {
-    // A provider hiccup must not close a real subscription, so leave the row
-    // alone and let the caller proceed as before.
-    console.warn('[billing] could not verify tracked subscription:', (err as Error)?.message);
-    return { live: null, closedOut: false, reason: 'lookup_failed' };
+    // A 404 is the provider stating the subscription does not exist, which is not
+    // a hiccup: the local row is definitively stale and has to be retired, or the
+    // customer keeps a plan they can neither buy again, cancel nor resume. Any
+    // other failure leaves the row alone so a real subscription is never closed
+    // out by a provider blip.
+    if (!(err instanceof RazorpayError) || err.status !== 404) {
+      console.warn('[billing] could not verify tracked subscription:', (err as Error)?.message);
+      return { live: null, closedOut: false, reason: 'lookup_failed' };
+    }
+    const gone: RazorpaySubscription = {
+      id: args.trackedId,
+      customer_id: args.customerId ?? undefined,
+      status: 'cancelled',
+      current_start: null,
+      current_end: null,
+    };
+    const applied = await applySubscription(admin, {
+      sub: gone,
+      userId: args.userId,
+      overrideStatus: 'canceled',
+      terminal: true,
+    });
+    console.warn(
+      `[billing] closed out subscription ${gone.id} as missing at the provider (${applied.status})`,
+    );
+    return { live: null, closedOut: true, reason: 'not_found_at_provider' };
   }
   if (isLiveStatus(mapRazorpayStatus(sub.status))) {
     return { live: sub, closedOut: false, reason: 'live' };
@@ -534,7 +564,9 @@ export async function sweepAbandonedSubscriptions(admin: Admin): Promise<number>
     }
     try {
       const live = await fetchSubscription(id);
-      if (isLiveStatus(mapRazorpayStatus(live.status)) && !hasStartedCycle(live)) {
+      // A created-but-unpaid subscription still carries a `current_start`, so the
+      // cycle check cannot tell "never charged" from "billing". The status can.
+      if (isLiveStatus(mapRazorpayStatus(live.status)) && !hasBeenCharged(live.status)) {
         await cancelNow(id);
         console.log('[billing] cancelled abandoned subscription', id);
       }

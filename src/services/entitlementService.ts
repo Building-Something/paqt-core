@@ -285,18 +285,42 @@ declare global {
   }
 }
 
+/**
+ * A billing call has to finish or fail on its own: without a deadline a hung
+ * edge function or a dropped connection leaves the customer staring at a
+ * spinner with no way forward and no idea whether they were charged.
+ */
+const BILLING_TIMEOUT_MS = 20_000;
+
 async function callBillingEdge(name: string, body?: unknown): Promise<Record<string, unknown>> {
   const client = supabaseOrThrow();
   const { data } = await client.auth.getSession();
-  const token = data.session?.access_token ?? null;
-  const response = await fetch(edgeFunctionUrl(name), {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token ?? ''}`,
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  const token = data.session?.access_token;
+  if (!token) {
+    // Sending an empty bearer produced an opaque server-side rejection that read
+    // like a billing outage rather than an expired session.
+    throw {
+      code: 'unauthorized',
+      message: 'Your session has expired. Sign in again to continue with billing.',
+    } satisfies CheckoutError;
+  }
+  let response: Response;
+  try {
+    response = await fetch(edgeFunctionUrl(name), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(BILLING_TIMEOUT_MS),
+    });
+  } catch {
+    throw {
+      code: 'billing_unreachable',
+      message: 'The billing service could not be reached. Check your connection and try again.',
+    } satisfies CheckoutError;
+  }
   const parsed = (await response.json().catch(() => ({}))) as Record<string, unknown>;
   if (!response.ok) {
     const error = (parsed.error ?? {}) as Record<string, unknown>;

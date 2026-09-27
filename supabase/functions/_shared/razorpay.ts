@@ -213,6 +213,45 @@ export function isLiveStatus(status: string | null | undefined): boolean {
   return LIVE_STATUSES.has((status ?? '') as PaqtStatus);
 }
 
+/**
+ * Raw provider statuses that Razorpay only ever reaches after a charge.
+ *
+ * Keyed on the raw string rather than the mapped status because an unknown
+ * status maps to `past_due`, which would otherwise be indistinguishable from a
+ * real `halted` subscription. An unrecognised status therefore fails closed and
+ * is never treated as paid.
+ */
+const CHARGED_RAW_STATUSES = new Set([
+  'active',
+  'pending',
+  'charging',
+  'paid',
+  'halted',
+  'paused',
+  'cancelled',
+  'canceled',
+  'completed',
+  'expired',
+]);
+
+/**
+ * True when Razorpay's status proves a charge actually landed.
+ *
+ * This is deliberately stricter than {@link isLiveStatus}, and stricter than a
+ * check on the period fields. Razorpay populates `current_start` and
+ * `current_end` the moment a subscription is *created*, before any money moves,
+ * so an abandoned checkout carries a future "paid" period. A `created` or
+ * `authenticated` subscription has therefore never been paid for, and treating
+ * it as paid would hand out a plan nobody bought.
+ *
+ * `cancelled` and the other terminal statuses are included: Razorpay reaches
+ * them only after the subscription was live, so a cancellation must not erase a
+ * period the customer already paid through.
+ */
+export function hasBeenCharged(status: string | null | undefined): boolean {
+  return typeof status === 'string' && CHARGED_RAW_STATUSES.has(status.trim().toLowerCase());
+}
+
 /** True when the subscription has actually entered a paid billing cycle. */
 export function hasStartedCycle(sub: RazorpaySubscription | null | undefined): boolean {
   return typeof sub?.current_start === 'number' && sub.current_start > 0;
@@ -420,8 +459,8 @@ export async function listSubscriptions(
 }
 
 /**
- * Picks the subscription a customer has actually paid for: live upstream, in a
- * cycle, paid through to a future boundary. The most recent cycle wins.
+ * Picks the subscription a customer has actually paid for: charged upstream,
+ * in a cycle, paid through to a future boundary. The most recent cycle wins.
  */
 export function pickPaidSubscription(
   items: RazorpaySubscription[],
@@ -430,6 +469,7 @@ export function pickPaidSubscription(
   const paid = items.filter(
     (sub) =>
       isLiveStatus(mapRazorpayStatus(sub.status)) &&
+      hasBeenCharged(sub.status) &&
       hasStartedCycle(sub) &&
       hasPaidPeriod(sub, nowMs),
   );
@@ -475,11 +515,72 @@ export async function createCustomer(input: {
 }
 
 /**
+ * How a Razorpay customer relates to the Paqt user asking for it.
+ *
+ * - `ours`     the note names this user.
+ * - `legacy`   no note, so the customer predates the notes and cannot be disproved.
+ * - `adoptable` a different user id, but the same email.
+ * - `foreign`  a different user id on a different email.
+ */
+type CustomerClaim = 'ours' | 'legacy' | 'adoptable' | 'foreign';
+
+function sameEmail(a: unknown, b: unknown): boolean {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const norm = (v: string) => v.trim().toLowerCase();
+  return norm(a) === norm(b) && norm(a) !== '';
+}
+
+/**
+ * Decides whether a Razorpay customer is safe to attach to this Paqt user.
+ *
+ * The email is the tie-breaker, not the note. Deleting a Supabase auth row and
+ * re-registering issues a *new* user id for the same person, but `fail_existing`
+ * keeps returning the same Razorpay customer, so its note goes stale. Refusing a
+ * stale note would lock that person out of checkout permanently, and adopting a
+ * foreign customer's customer id would hand one account the plan another paid
+ * for. Supabase auth emails are unique, so a matching email is the same human and
+ * a differing one is a genuine collision.
+ */
+function classifyCustomer(
+  customer: RazorpayCustomer | null | undefined,
+  userId: string,
+  email: string,
+): CustomerClaim {
+  if (!customer) return 'foreign';
+  const notes = customer.notes ?? {};
+  const owner = notes.user_id ?? notes.paqt_user_id;
+  if (owner === undefined || owner === null || owner === '') return 'legacy';
+  if (owner === userId) return 'ours';
+  return sameEmail(customer.email, email) ? 'adoptable' : 'foreign';
+}
+
+/**
+ * Re-stamps the ownership note after a re-registration so later reads classify
+ * the customer as `ours` instead of re-deciding on every checkout. Best effort:
+ * the note is bookkeeping, so a failure must not fail the checkout.
+ */
+async function stampCustomerOwner(customerId: string, userId: string): Promise<void> {
+  try {
+    await call<RazorpayCustomer>('PATCH', `/customers/${customerId}`, {
+      name: undefined,
+      email: undefined,
+      notes: { user_id: userId },
+    });
+  } catch (err) {
+    console.error(
+      `[razorpay] could not re-stamp ownership on ${customerId}:`,
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
+/**
  * Resolves the Razorpay customer for a Paqt user, creating one if needed.
  *
  * The stored id is validated first: if the API keys were rotated between test and
  * live mode, a stale id is rejected by Razorpay and every later checkout would
- * fail with a confusing provider error.
+ * fail with a confusing provider error. Ownership is then checked, because a
+ * customer created for a different Paqt user must never be reused.
  */
 export async function getOrCreateCustomer(
   admin: Admin,
@@ -487,6 +588,19 @@ export async function getOrCreateCustomer(
   email: string,
   name: string,
 ): Promise<string> {
+  const link = async (customerId: string) => {
+    const { error } = await admin.from('profiles').upsert(
+      { user_id: userId, payment_customer_id: customerId, updated_at: Date.now() },
+      { onConflict: 'user_id' },
+    );
+    if (error) {
+      // The customer exists upstream; a missing local link only means the next
+      // read has to look it up again, so this is not fatal for the checkout.
+      console.error('[razorpay] could not link customer to profile:', error.message);
+    }
+    return customerId;
+  };
+
   const { data } = await admin
     .from('profiles')
     .select('payment_customer_id')
@@ -495,8 +609,19 @@ export async function getOrCreateCustomer(
   const existing = data?.payment_customer_id as string | null | undefined;
   if (existing) {
     try {
-      await fetchCustomer(existing);
-      return existing;
+      const customer = await fetchCustomer(existing);
+      const claim = classifyCustomer(customer, userId, email);
+      if (claim === 'ours' || claim === 'legacy') return existing;
+      if (claim === 'adoptable') {
+        console.warn(
+          `[razorpay] customer ${existing} carries a stale owner note; re-registering the same email, so adopting it`,
+        );
+        await stampCustomerOwner(existing, userId);
+        return await link(existing);
+      }
+      console.error(
+        `[razorpay] customer ${existing} belongs to a different Paqt user; not reusing it`,
+      );
     } catch {
       await admin
         .from('profiles')
@@ -509,16 +634,19 @@ export async function getOrCreateCustomer(
     email: email || undefined,
     notes: { user_id: userId },
   });
-  const { error } = await admin.from('profiles').upsert(
-    { user_id: userId, payment_customer_id: customer.id, updated_at: Date.now() },
-    { onConflict: 'user_id' },
-  );
-  if (error) {
-    // The customer exists upstream; a missing local link only means the next
-    // read has to look it up again, so this is not fatal for the checkout.
-    console.error('[razorpay] could not link customer to profile:', error.message);
+  const claim = classifyCustomer(customer, userId, email);
+  if (claim === 'foreign') {
+    // `fail_existing` can hand back the customer that already owns this email,
+    // which belongs to somebody else. Linking it would merge two accounts, so the
+    // checkout is refused and the collision is logged for a human to clean up.
+    throw new RazorpayError(
+      409,
+      'customer_conflict',
+      `customer ${customer.id} is registered to a different account`,
+    );
   }
-  return customer.id;
+  if (claim === 'adoptable') await stampCustomerOwner(customer.id, userId);
+  return await link(customer.id);
 }
 
 // ---------------------------------------------------------------------------

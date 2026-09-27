@@ -16,8 +16,8 @@ import {
   cancelScheduledChanges,
   createAdmin,
   fetchSubscription,
+  hasBeenCharged,
   hasPaidPeriod,
-  hasStartedCycle,
   isLiveStatus,
   listSubscriptions,
   mapRazorpayStatus,
@@ -171,7 +171,10 @@ Deno.serve(async (req) => {
           req,
         );
       }
-      if (hasStartedCycle(live) && hasPaidPeriod(live)) {
+      // Only a subscription that actually charged can keep its paid period. An
+      // abandoned checkout must be cancelled outright, otherwise it stays armed
+      // to take a future payment for a purchase the customer never completed.
+      if (hasBeenCharged(live.status) && hasPaidPeriod(live)) {
         // Cancel at the end of the period the customer already paid for: access
         // continues until current_end and Razorpay stops billing.
         let cancelled: RazorpaySubscription;

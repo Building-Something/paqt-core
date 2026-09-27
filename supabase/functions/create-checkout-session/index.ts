@@ -17,6 +17,7 @@ import {
   fetchSubscription,
   findByOperation,
   getOrCreateCustomer,
+  hasBeenCharged,
   hasPaidPeriod,
   hasStartedCycle,
   isProviderEnded,
@@ -265,7 +266,11 @@ Deno.serve(async (req) => {
     }
 
     // ---- A live, paid subscription already exists ------------------------
-    if (live?.id && hasPaidPeriod(live)) {
+    // The status must prove a charge landed: a `created` subscription also
+    // carries a future `current_end`, and treating that as paid would tell a
+    // customer who abandoned checkout that they are subscribed, never charge
+    // them, and never reopen the payment modal.
+    if (live?.id && hasBeenCharged(live.status) && hasPaidPeriod(live)) {
       const samePlan = live.plan_id === plan.price_id;
 
       if (samePlan && paymentMethod === 'same') {
@@ -401,7 +406,9 @@ Deno.serve(async (req) => {
     }
 
     // ---- A live subscription that has never charged ----------------------
-    if (live?.id && !hasStartedCycle(live)) {
+    // Status, not `current_start`: Razorpay pre-fills the period on creation, so
+    // an abandoned checkout is only identifiable as uncharged by its status.
+    if (live?.id && !hasBeenCharged(live.status)) {
       const ageMs = live.created_at ? Date.now() - live.created_at * 1000 : Number.POSITIVE_INFINITY;
       const samePlan = live.plan_id === plan.price_id;
       if (samePlan && ageMs < REUSABLE_CHECKOUT_MS) {
