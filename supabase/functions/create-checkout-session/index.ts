@@ -155,8 +155,10 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Infinite monthly subscription; the user pays again each cycle until
-    // they cancel (autopay is on by default, reflected in the UI/notice).
+    // Auto-renewing monthly subscription that keeps charging each cycle until
+    // the user cancels (autopay on by default). Razorpay does not accept
+    // total_count: 0 on creation, so we bound it to the maximum allowed
+    // duration (100 years = 1200 monthly cycles); cancellation ends it early.
     const subscription = await razorpayJson<RazorpaySubscriptionEntity>(
       '/subscriptions',
       {
@@ -164,7 +166,7 @@ Deno.serve(async (req) => {
         body: JSON.stringify({
           plan_id: priceId,
           customer_id: customerId,
-          total_count: 0,
+          total_count: 1200,
           customer_notify: true,
           notes: {
             user_id: user.id,
