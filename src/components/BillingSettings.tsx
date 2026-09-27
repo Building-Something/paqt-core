@@ -178,7 +178,9 @@ export function BillingSettings() {
                   <div>
                     <p className="text-sm font-medium text-foreground">Auto-renew is on</p>
                     <p className="mt-0.5 text-xs text-muted-foreground">
-                      You’ll be charged {plan ? `${formatPriceInr(plan.price_inr)}` : 'the plan price'}/month again on{' '}
+                      Your card is auto-charged{' '}
+                      {plan ? `${formatPriceInr(plan.price_inr)}` : 'the plan price'}/month and your
+                      plan renews automatically every month — until you cancel. Next charge on{' '}
                       {formatMonthDay(sub.current_period_end) ?? 'your next billing date'}.
                     </p>
                   </div>
@@ -197,8 +199,9 @@ export function BillingSettings() {
                   </Button>
                   <p className="mt-2 flex items-start gap-1.5 text-xs leading-relaxed text-muted-foreground">
                     <ShieldCheck className="mt-0.5 size-3.5 shrink-0 text-primary" aria-hidden="true" />
-                    Cancel stops all future monthly charges. You keep full access until the end of
-                    the period you already paid for, then the plan ends — like Netflix.
+                    Cancel switches auto-renew off: no more monthly charges. You keep full access
+                    until the end of the period you already paid for, then the plan ends — like
+                    Netflix.
                   </p>
                 </div>
               </div>
