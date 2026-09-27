@@ -9,6 +9,8 @@ import {
   openRazorpayCheckout,
   reconciledMessage,
   cancelMessage,
+  isPaidPeriodReplacement,
+  paidPeriodReplacementMessage,
   scheduledChangeMessage,
   resetCheckoutIdempotencyKey,
   NO_USAGE,
@@ -246,6 +248,52 @@ function subscription(overrides: Partial<SubscriptionInfo> = {}): SubscriptionIn
     ...overrides,
   };
 }
+
+describe('isPaidPeriodReplacement', () => {
+  it('recognises only the paid-period refusal', () => {
+    expect(
+      isPaidPeriodReplacement({
+        code: 'grace_period_replacement_required',
+        message: 'x',
+      }),
+    ).toBe(true);
+    expect(isPaidPeriodReplacement({ code: 'active_subscription_exists', message: 'x' })).toBe(
+      false,
+    );
+    expect(isPaidPeriodReplacement(new Error('network'))).toBe(false);
+  });
+});
+
+describe('paidPeriodReplacementMessage', () => {
+  const paidPeriodEnd = Date.UTC(2026, 9, 26);
+  const on = new Date(paidPeriodEnd).toLocaleDateString(undefined, {
+    day: 'numeric',
+    month: 'short',
+  });
+
+  it('says when the new plan starts and that nothing is charged yet', () => {
+    const message = paidPeriodReplacementMessage(
+      checkout({ planId: 'pro', replacingPaidPeriod: true, paidPeriodEnd }),
+    );
+    expect(message).toContain('Pro');
+    expect(message).toContain(on);
+    expect(message).toMatch(/nothing is charged until then/i);
+  });
+
+  it('never implies the new plan is active now', () => {
+    const message = paidPeriodReplacementMessage(
+      checkout({ planId: 'pro', replacingPaidPeriod: true, paidPeriodEnd }),
+    );
+    expect(message).toMatch(/starts on/i);
+  });
+
+  it('falls back to the period wording when the end date is unknown', () => {
+    const message = paidPeriodReplacementMessage(
+      checkout({ planId: 'pro', replacingPaidPeriod: true, paidPeriodEnd: null }),
+    );
+    expect(message).toMatch(/end of your current period/i);
+  });
+});
 
 describe('cancelMessage', () => {
   const periodEnd = Date.UTC(2026, 9, 25);

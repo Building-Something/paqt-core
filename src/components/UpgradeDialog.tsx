@@ -16,11 +16,14 @@ import {
   openRazorpayCheckout,
   PLANS,
   BUSINESS_PLAN,
+  isPaidPeriodReplacement,
   reconciledMessage,
+  paidPeriodReplacementMessage,
   scheduledChangeMessage,
   type CheckoutError,
 } from '../services/entitlementService';
 import { Button } from './ui/button';
+import { ConfirmDialog } from './ConfirmDialog';
 import { PlanCard } from './PlanCard';
 
 export type UpgradeReason = 'analysis' | 'draft' | 'plan';
@@ -78,6 +81,12 @@ export function UpgradeDialog({
   const { toast } = useToast();
   const navigate = useNavigate();
   const [busyPlan, setBusyPlan] = useState<string | null>(null);
+  // Set when the server refused to start a checkout because the account still owns
+  // a period it has already paid for. The plan id is kept so confirming resumes the
+  // same attempt rather than making the customer choose again.
+  const [pendingPaidPeriod, setPendingPaidPeriod] = useState<{ planId: string; message: string } | null>(
+    null,
+  );
 
   const hasPlan = Boolean(usage.planId);
   const isBusiness = usage.planId === 'business';
@@ -92,10 +101,10 @@ export function UpgradeDialog({
     plan: 'Subscribe to a plan to analyze contracts, compose drafts, and chat about them.',
   };
 
-  async function handleCheckout(planId: string) {
+  async function handleCheckout(planId: string, confirmReplacingPaidPeriod = false) {
     setBusyPlan(planId);
     try {
-      const checkout = await beginCheckout(planId);
+      const checkout = await beginCheckout(planId, { confirmReplacingPaidPeriod });
       const outcome = await openRazorpayCheckout(checkout);
       if (outcome === 'reconciled') {
         // Paqt had lost track of a subscription that was already paid for and
@@ -109,7 +118,12 @@ export function UpgradeDialog({
       if (outcome === 'scheduled') {
         // A cycle-end plan change collects nothing now, so the dialog closes and
         // the user keeps the plan they already paid for.
-        toast('success', scheduledChangeMessage(checkout));
+        toast(
+          'success',
+          checkout.replacingPaidPeriod
+            ? paidPeriodReplacementMessage(checkout)
+            : scheduledChangeMessage(checkout),
+        );
         onClose();
         await refresh();
         return;
@@ -118,6 +132,13 @@ export function UpgradeDialog({
         window.location.assign('/settings?checkout=success');
       }
     } catch (caught) {
+      if (isPaidPeriodReplacement(caught)) {
+        // The account still owns a period it has paid for. Starting the new plan
+        // now would not extend anything, so the customer is told what the new plan
+        // costs them and when before any payment method opens.
+        setPendingPaidPeriod({ planId, message: caught.message });
+        return;
+      }
       const message =
         (caught as CheckoutError)?.message ?? 'Could not start checkout. Try again in a moment.';
       toast('error', message);
@@ -250,6 +271,23 @@ export function UpgradeDialog({
           )}
         </div>
       </div>
+
+      <ConfirmDialog
+        open={pendingPaidPeriod !== null}
+        title="You have a paid period left"
+        body={<p>{pendingPaidPeriod?.message}</p>}
+        confirmLabel="Start the new plan"
+        cancelLabel="Keep my current plan"
+        busy={busyPlan !== null}
+        onConfirm={() => {
+          const planId = pendingPaidPeriod?.planId;
+          setPendingPaidPeriod(null);
+          if (planId) {
+            void handleCheckout(planId, true);
+          }
+        }}
+        onClose={() => setPendingPaidPeriod(null)}
+      />
     </div>
   );
 }

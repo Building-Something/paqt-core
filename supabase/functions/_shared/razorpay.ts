@@ -228,6 +228,17 @@ export function willChargeInFuture(sub: RazorpaySubscription | null | undefined,
   return typeof sub?.charge_at === 'number' && sub.charge_at * 1000 > nowMs;
 }
 
+/**
+ * Provider statuses after which Razorpay will never take another payment for the
+ * subscription. A row in one of these states can no longer double-charge, which is
+ * what the one-live-per-user guard is protecting against.
+ */
+const PROVIDER_TERMINAL_STATUSES = ['cancelled', 'canceled', 'completed', 'expired'];
+
+export function isProviderEnded(status: string | null | undefined): boolean {
+  return typeof status === 'string' && PROVIDER_TERMINAL_STATUSES.includes(status.toLowerCase());
+}
+
 export function ms(value: number | null | undefined): number | null {
   if (value == null) {
     return null;

@@ -19,6 +19,7 @@ import {
   getOrCreateCustomer,
   hasPaidPeriod,
   hasStartedCycle,
+  isProviderEnded,
   isLiveStatus,
   listSubscriptions,
   mapRazorpayStatus,
@@ -50,6 +51,11 @@ interface CheckoutRequest {
   plan_id?: unknown;
   payment_method?: unknown;
   idempotency_key?: unknown;
+  /**
+   * Set by the client after the customer has been shown what starting now costs
+   * them: an unused, already-paid period that will not be carried over.
+   */
+  confirm_replacing_grace?: unknown;
 }
 
 function pickLiveSubscription(
@@ -221,6 +227,42 @@ Deno.serve(async (req) => {
     }
 
     const live = pickLiveSubscription(items, trackedId);
+
+    // ---- Replacing a period that is paid for but already stopped -----------
+    // Razorpay can end a subscription while the period it was paid for is still
+    // running (it refuses a scheduled cancel for UPI, so Paqt cancels at the
+    // provider and holds the period itself). There is then no live subscription
+    // and nothing left that can double-charge, so a new one is safe to create.
+    // It is not free, though: the unused days are not prorated, refunded or
+    // transferred, so this is confirmed before any payment is started.
+    const graceEndsAt =
+      !live?.id &&
+      state?.status === 'canceling' &&
+      state?.cancel_at_period_end === true &&
+      isProviderEnded(state?.razorpay_status) &&
+      typeof state?.period_end === 'number' &&
+      state.period_end > Date.now()
+        ? state.period_end
+        : null;
+    if (graceEndsAt !== null && body.confirm_replacing_grace !== true) {
+      const on = new Date(graceEndsAt).toLocaleDateString('en-IN', {
+        day: 'numeric',
+        month: 'short',
+      });
+      const next = plan.name;
+      throw new HttpError(
+        409,
+        'grace_period_replacement_required',
+        `Your ${state?.plan_name ?? 'current'} plan is paid until ${on} and will not renew. ${next} starts on ${on}, and you are charged then — nothing is charged today.`,
+        {
+          grace_period_end: graceEndsAt,
+          new_plan_id: planId,
+          new_plan_name: next,
+          current_plan_id: state?.plan_id ?? null,
+          current_plan_name: state?.plan_name ?? null,
+        },
+      );
+    }
 
     // ---- A live, paid subscription already exists ------------------------
     if (live?.id && hasPaidPeriod(live)) {
@@ -453,6 +495,11 @@ Deno.serve(async (req) => {
       email: user.email,
       starts_at: ms(created.start_at ?? null),
       period_end: ms(created.current_end ?? null),
+      // The new plan begins when the already-paid period ends rather than now, so
+      // the customer is neither charged twice for the same days nor loses them.
+      ...(graceEndsAt !== null
+        ? { replacing_paid_period: true, paid_period_end: graceEndsAt }
+        : {}),
     };
     await finishOperation(admin, {
       key: operationKey,

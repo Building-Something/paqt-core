@@ -194,6 +194,10 @@ export async function fetchMyUsage(): Promise<UsageSnapshot> {
 export interface CheckoutError {
   code: string;
   message: string;
+  /** Set when the only way forward gives up an already-paid period. */
+  gracePeriodEnd?: number | null;
+  newPlanName?: string | null;
+  currentPlanName?: string | null;
 }
 
 export interface RazorpayCheckout {
@@ -210,6 +214,12 @@ export interface RazorpayCheckout {
   reconciled?: boolean;
   planId?: string | null;
   periodEnd?: number | null;
+  /**
+   * True when this purchase begins at the end of a period that is already paid
+   * for, instead of charging today.
+   */
+  replacingPaidPeriod?: boolean;
+  paidPeriodEnd?: number | null;
   /** True when the plan change is scheduled for the next cycle, not applied now. */
   scheduled?: boolean;
   scheduledChangeAt?: number | null;
@@ -289,10 +299,16 @@ async function callBillingEdge(name: string, body?: unknown): Promise<Record<str
   });
   const parsed = (await response.json().catch(() => ({}))) as Record<string, unknown>;
   if (!response.ok) {
-    const error = (parsed.error ?? {}) as { code?: string; message?: string };
+    const error = (parsed.error ?? {}) as Record<string, unknown>;
     throw {
-      code: error.code ?? 'billing_failed',
-      message: error.message ?? 'The billing service could not be reached. Try again in a moment.',
+      code: typeof error.code === 'string' ? error.code : 'billing_failed',
+      message:
+        typeof error.message === 'string'
+          ? error.message
+          : 'The billing service could not be reached. Try again in a moment.',
+      gracePeriodEnd: toMs(error.grace_period_end),
+      newPlanName: toStringOrNull(error.new_plan_name),
+      currentPlanName: toStringOrNull(error.current_plan_name),
     } satisfies CheckoutError;
   }
   return parsed;
@@ -328,12 +344,15 @@ export function resetCheckoutIdempotencyKey(): void {
 
 export async function beginCheckout(
   planId: string,
-  options: { paymentMethod?: 'same' | 'new' } = {},
+  options: { paymentMethod?: 'same' | 'new'; confirmReplacingPaidPeriod?: boolean } = {},
 ): Promise<RazorpayCheckout> {
   const body = await callBillingEdge('create-checkout-session', {
     plan_id: planId,
+    // A fresh key per attempt: confirming changes what the server is being asked
+    // to do, and a replayed key with different details is refused.
     idempotency_key: checkoutIdempotencyKey(),
     ...(options.paymentMethod === 'new' ? { payment_method: 'new' } : {}),
+    ...(options.confirmReplacingPaidPeriod ? { confirm_replacing_grace: true } : {}),
   });
   if (body.switched === true) {
     return {
@@ -362,7 +381,33 @@ export async function beginCheckout(
     email: typeof body.email === 'string' ? body.email : null,
     adopted: body.adopted === true,
     startsAt: typeof body.starts_at === 'number' ? body.starts_at : null,
+    replacingPaidPeriod: body.replacing_paid_period === true,
+    paidPeriodEnd: toMs(body.paid_period_end),
   };
+}
+
+/**
+ * True when the server stopped the checkout because the account still owns a
+ * period it has already paid for, and starting the new plan now would take that
+ * period's place. The customer has to be told before a payment method is opened.
+ */
+export function isPaidPeriodReplacement(err: unknown): err is CheckoutError {
+  return (err as CheckoutError)?.code === 'grace_period_replacement_required';
+}
+
+/**
+ * Describes a checkout that begins when the current paid period ends. Nothing is
+ * charged now, so the wording must not imply the new plan is already active.
+ */
+export function paidPeriodReplacementMessage(checkout: RazorpayCheckout): string {
+  const next = PLANS.find((entry) => entry.id === checkout.planId)?.name ?? 'Your new plan';
+  const on = checkout.paidPeriodEnd
+    ? new Date(checkout.paidPeriodEnd).toLocaleDateString(undefined, {
+        day: 'numeric',
+        month: 'short',
+      })
+    : 'the end of your current period';
+  return `${next} starts on ${on}, when your current plan ends. Nothing is charged until then, and your current plan will not renew.`;
 }
 
 let checkoutScriptPromise: Promise<void> | null = null;
@@ -407,12 +452,13 @@ export async function openRazorpayCheckout(
 ): Promise<CheckoutOutcome> {
   if (checkout.switched) {
     // Nothing was collected: either the plan change is scheduled for the next
-    // cycle, or the account was re-synced to a subscription that was already paid.
+    // cycle, the new plan starts when an already-paid period ends, or the account
+    // was re-synced to a subscription that was already paid.
     resetCheckoutIdempotencyKey();
     if (checkout.reconciled) {
       return 'reconciled';
     }
-    return checkout.scheduled ? 'scheduled' : 'completed';
+    return checkout.scheduled || checkout.replacingPaidPeriod ? 'scheduled' : 'completed';
   }
   await loadRazorpayScript();
   const Checkout = window.Razorpay;

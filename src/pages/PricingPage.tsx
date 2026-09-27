@@ -7,8 +7,9 @@ import { Button } from '../components/ui/button';
 import { Card } from '../components/ui/card';
 import { useAuth } from '../contexts/AuthContext';
 import { useEntitlement } from '../contexts/EntitlementContext';
-import { beginCheckout, manageSubscription, openRazorpayCheckout, reconciledMessage, scheduledChangeMessage, PLANS, BUSINESS_PLAN, type CheckoutError } from '../services/entitlementService';
+import { beginCheckout, isPaidPeriodReplacement, manageSubscription, openRazorpayCheckout, paidPeriodReplacementMessage, reconciledMessage, scheduledChangeMessage, PLANS, BUSINESS_PLAN, type CheckoutError } from '../services/entitlementService';
 import { useToast } from '../contexts/ToastContext';
+import { ConfirmDialog } from '../components/ConfirmDialog';
 
 const EVERYTHING_INCLUDED = [
   'Unlimited chat about a contract or draft',
@@ -57,13 +58,19 @@ export function PricingPage() {
   const { toast } = useToast();
   const navigate = useNavigate();
   const [busyPlan, setBusyPlan] = useState<string | null>(null);
+  // Set when the server refused to start a checkout because the account still owns
+  // a period it has already paid for.
+  const [pendingPaidPeriod, setPendingPaidPeriod] = useState<{
+    planId: string;
+    message: string;
+  } | null>(null);
 
   const signedIn = Boolean(session);
 
-  async function handleChoose(planId: string) {
+  async function handleChoose(planId: string, confirmReplacingPaidPeriod = false) {
     setBusyPlan(planId);
     try {
-      const checkout = await beginCheckout(planId);
+      const checkout = await beginCheckout(planId, { confirmReplacingPaidPeriod });
       const outcome = await openRazorpayCheckout(checkout);
       if (outcome === 'reconciled') {
         // Paqt had lost track of a subscription that was already paid for and
@@ -73,7 +80,12 @@ export function PricingPage() {
         return;
       }
       if (outcome === 'scheduled') {
-        toast('success', scheduledChangeMessage(checkout));
+        toast(
+          'success',
+          checkout.replacingPaidPeriod
+            ? paidPeriodReplacementMessage(checkout)
+            : scheduledChangeMessage(checkout),
+        );
         await refresh();
         return;
       }
@@ -81,6 +93,10 @@ export function PricingPage() {
         window.location.assign('/settings?checkout=success');
       }
     } catch (caught) {
+      if (isPaidPeriodReplacement(caught)) {
+        setPendingPaidPeriod({ planId, message: caught.message });
+        return;
+      }
       const message =
         (caught as CheckoutError)?.message ?? 'Could not start checkout. Try again in a moment.';
       toast('error', message);
@@ -219,14 +235,32 @@ export function PricingPage() {
               <dt className="font-medium text-foreground">Can I change or cancel my plan?</dt>
               <dd className="mt-0.5 leading-relaxed text-muted-foreground">
                 Yes — cancel anytime from Plan &amp; billing in Settings; your plan stays active
-                until the end of the current month. To switch plans or change billing details,
-                write to sales@paqt.app and we will set it up before your next renewal.
+                until the end of the current month. Switching plans is self-serve: a change
+                takes effect at your next renewal, so you are never charged twice for the same
+                days.
               </dd>
             </div>
           </dl>
         </Card>
       </main>
       <MarketingFooter />
+
+      <ConfirmDialog
+        open={pendingPaidPeriod !== null}
+        title="You have a paid period left"
+        body={<p>{pendingPaidPeriod?.message}</p>}
+        confirmLabel="Start the new plan"
+        cancelLabel="Keep my current plan"
+        busy={busyPlan !== null}
+        onConfirm={() => {
+          const planId = pendingPaidPeriod?.planId;
+          setPendingPaidPeriod(null);
+          if (planId) {
+            void handleChoose(planId, true);
+          }
+        }}
+        onClose={() => setPendingPaidPeriod(null)}
+      />
     </div>
   );
 }

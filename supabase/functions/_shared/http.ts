@@ -5,12 +5,19 @@ import type { Admin } from './razorpay.ts';
 export class HttpError extends Error {
   readonly status: number;
   readonly code: string;
+  /**
+   * Extra machine-readable fields sent alongside the message, so the client can
+   * react to a specific case (a grace period that would be given up) instead of
+   * showing generic advice the customer cannot act on.
+   */
+  readonly details: Record<string, unknown>;
 
-  constructor(status: number, code: string, message: string) {
+  constructor(status: number, code: string, message: string, details: Record<string, unknown> = {}) {
     super(message);
     this.name = 'HttpError';
     this.status = status;
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -76,8 +83,9 @@ export function jsonError(
   code: string,
   message: string,
   request?: Request,
+  details: Record<string, unknown> = {},
 ): Response {
-  return new Response(JSON.stringify({ error: { code, message } }), {
+  return new Response(JSON.stringify({ error: { code, message, ...details } }), {
     status,
     headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
   });
@@ -144,7 +152,7 @@ export async function requireUser(admin: Admin, req: Request): Promise<AuthedUse
 
 export function toResponse(err: unknown, req: Request): Response {
   if (err instanceof HttpError) {
-    return jsonError(err.status, err.code, err.message, req);
+    return jsonError(err.status, err.code, err.message, req, err.details);
   }
   console.error('[billing] unhandled error:', (err as Error)?.stack ?? err);
   return jsonError(500, 'internal_error', 'Something went wrong. Try again in a moment.', req);

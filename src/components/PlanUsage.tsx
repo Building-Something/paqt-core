@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { Loader2, ScanSearch, FilePenLine, ArrowUpRight, Coins, X } from 'lucide-react';
+import { Loader2, ScanSearch, FilePenLine, ArrowUpRight, Coins } from 'lucide-react';
 import { useEntitlement } from '../contexts/EntitlementContext';
 import { useUpgrade } from './UpgradeDialog';
 import { useToast } from '../contexts/ToastContext';
@@ -21,6 +21,7 @@ import {
   type CheckoutError,
 } from '../services/entitlementService';
 import { Button } from './ui/button';
+import { ConfirmDialog } from './ConfirmDialog';
 import { Card } from './ui/card';
 
 export function useFeatureGate() {
@@ -504,56 +505,22 @@ export function PlanUsageCard({ compact = false }: { compact?: boolean }) {
       ) : null}
     </Card>
 
-    {confirmCancelOpen ? (
-      <div
-        className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="cancel-plan-title"
-      >
-        <div className="w-full max-w-md rounded-xl border border-border bg-background shadow-xl">
-          <div className="flex items-start justify-between gap-4 px-6 py-5">
-            <div>
-              <h2 id="cancel-plan-title" className="text-lg font-semibold tracking-tight text-foreground">
-                Cancel your subscription?
-              </h2>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Your plan stays active until the end of the current month, and you will not
-                be charged again.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setConfirmCancelOpen(false)}
-              aria-label="Close"
-              disabled={busy === 'cancel'}
-              className="rounded-md p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
-            >
-              <X className="size-4" aria-hidden="true" />
-            </button>
-          </div>
-          <div className="flex flex-wrap justify-end gap-2 border-t border-border px-6 py-4">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={busy === 'cancel'}
-              onClick={() => setConfirmCancelOpen(false)}
-            >
-              Keep my plan
-            </Button>
-            <Button
-              variant="destructive"
-              size="sm"
-              disabled={busy === 'cancel'}
-              onClick={() => void handleCancelConfirm()}
-            >
-              {busy === 'cancel' ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : null}
-              Cancel subscription
-            </Button>
-          </div>
-        </div>
-      </div>
-    ) : null}
+    <ConfirmDialog
+      open={confirmCancelOpen}
+      title="Cancel your subscription?"
+      body={
+        <p>
+          Your plan stays active until the end of the current month, and you will not
+          be charged again.
+        </p>
+      }
+      confirmLabel="Cancel subscription"
+      cancelLabel="Keep my plan"
+      destructive
+      busy={busy === 'cancel'}
+      onConfirm={() => void handleCancelConfirm()}
+      onClose={() => setConfirmCancelOpen(false)}
+    />
     </>
   );
 }
