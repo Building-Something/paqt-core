@@ -270,6 +270,92 @@ describe('provider failures are mapped to actionable responses', () => {
   });
 });
 
+describe('switching away from a paid period the provider already closed', () => {
+  /**
+   * Razorpay refused the deferred cancel (UPI), so Paqt cancelled upstream and is
+   * still honouring the Individual period. Switching to Pro must not double-bill
+   * the days already paid for, and must not silently start charging today either.
+   */
+  const HELD_STATE = {
+    has_subscription: true,
+    status: 'canceling',
+    plan_id: 'individual',
+    plan_name: 'Individual',
+    razorpay_customer_id: 'cust_old',
+    razorpay_subscription_id: 'sub_dead',
+    razorpay_status: 'cancelled',
+    cancel_at_period_end: true,
+    period_start: NOW - 10 * DAY,
+    period_end: NOW + 20 * DAY,
+  };
+
+  const PERIOD_END = NOW + 20 * DAY;
+
+  beforeEach(async () => {
+    db = signedIn({ rpcResults: { paqt_billing_state: HELD_STATE, paqt_upsert_subscription: { ok: true } } });
+    handler = await loadHandler();
+    rz = installRazorpay({
+      createdCustomer: { id: 'cust_new', email: 'user@test.local', notes: { user_id: 'user-1' } },
+      // Razorpay echoes back the start_at the handler asked for.
+      createdSubscription: freshSubscription({
+        id: 'sub_pro',
+        plan_id: 'plan_pro',
+        start_at: SEC(PERIOD_END),
+        current_start: SEC(PERIOD_END),
+        current_end: SEC(PERIOD_END + 30 * DAY),
+      }),
+    });
+  });
+
+  it('switches straight away, charging nothing today', async () => {
+    // No confirmation round trip. The new subscription starts when the paid period
+    // ends, so the customer is neither double-charged nor blocked behind a 409.
+    const response = await handler(post({ plan_id: 'pro' }));
+    const payload = await body(response);
+
+    expect(response.status).toBe(200);
+    expect(payload).toMatchObject({
+      subscription_id: 'sub_pro',
+      plan_id: 'pro',
+      replacing_paid_period: true,
+      paid_period_end: PERIOD_END,
+    });
+
+    const created = harnessCalls().find((c) => c.method === 'POST' && c.url.endsWith('/v1/subscriptions'));
+    expect(created?.body).toMatchObject({ plan_id: 'plan_pro', start_at: SEC(PERIOD_END) });
+    // The whole promise: the charge lands on the 26th, not today.
+    expect((created?.body as { start_at: number }).start_at).toBeGreaterThan(SEC(NOW));
+  });
+
+  it('still ignores a stale confirm flag from a cached bundle', async () => {
+    const response = await handler(post({ plan_id: 'pro', confirm_replacing_grace: true }));
+
+    expect(response.status).toBe(200);
+    expect((await body(response)).replacing_paid_period).toBe(true);
+  });
+
+  it('switches the same plan too, rather than refusing', async () => {
+    const response = await handler(post({ plan_id: 'individual' }));
+
+    expect(response.status).toBe(200);
+    expect((await body(response)).paid_period_end).toBe(PERIOD_END);
+  });
+
+  it('does not claim a grace period for a still-live subscription', async () => {
+    db = signedIn({
+      rpcResults: {
+        paqt_billing_state: { ...HELD_STATE, razorpay_status: 'active', status: 'active' },
+        paqt_upsert_subscription: { ok: true },
+      },
+    });
+    handler = await loadHandler();
+
+    const response = await handler(post({ plan_id: 'pro' }));
+
+    expect(response.status).not.toBe(409);
+  });
+});
+
 describe('re-entrancy guards', () => {
   it('refuses a second concurrent checkout', async () => {
     db.rpcResults.paqt_claim_billing = false;

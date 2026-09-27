@@ -110,6 +110,35 @@ describe('requests', () => {
     expect(JSON.parse(sentRequest().init.body as string)).toEqual({ action: 'resume' });
   });
 
+  // The UI hides "Keep my plan" on this flag, so it has to survive a reload —
+  // it is read from a plain status response, not from the cancel that caused it.
+  it('carries the durable provider-ended flag out of a status read', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        has_subscription: true,
+        status: 'canceling',
+        plan_id: 'individual',
+        period_end: 1_800_000_000_000,
+        provider_ended: true,
+      }),
+    );
+
+    const info = await manageSubscription();
+
+    expect(info.providerEnded).toBe(true);
+    expect(info.status).toBe('canceling');
+    expect(info.periodEnd).toBe(1_800_000_000_000);
+  });
+
+  it('does not invent the provider-ended flag when the function omits it', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({ has_subscription: true, status: 'canceling', cancel_at_period_end: true }),
+    );
+
+    // A scheduled cancellation Razorpay can still undo: the button stays.
+    expect((await manageSubscription()).providerEnded).toBe(false);
+  });
+
   it('sends the plan the customer chose to create-checkout-session', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ key_id: 'rzp_test', subscription_id: 'sub_1' }));
 
@@ -140,6 +169,70 @@ describe('requests', () => {
     const next = JSON.parse(fetchMock.mock.calls[2][1].body as string).idempotency_key;
 
     expect(next).not.toBe(first);
+  });
+
+  it('drops the key after a rejected attempt so the next one is not refused', async () => {
+    // The bug this covers: a 409 left the failed attempt's key in place, and the
+    // next click replayed it with different details, so the server answered
+    // "This checkout request was reused with different details" and the customer
+    // was stuck on the error with no way through.
+    fetchMock.mockResolvedValueOnce(
+      errorResponse(409, 'grace_period_replacement_required', 'Confirm first.'),
+    );
+    fetchMock.mockResolvedValueOnce(jsonResponse({ key_id: 'rzp_test', subscription_id: 'sub_2' }));
+
+    await expect(beginCheckout('pro')).rejects.toMatchObject({
+      code: 'grace_period_replacement_required',
+    });
+    const failed = JSON.parse(sentRequest().init.body as string).idempotency_key;
+
+    await beginCheckout('pro', { confirmReplacingPaidPeriod: true });
+    const next = JSON.parse(fetchMock.mock.calls[1][1].body as string).idempotency_key;
+
+    expect(next).not.toBe(failed);
+  });
+
+  it('drops the key after an idempotency conflict, so retrying recovers', async () => {
+    fetchMock.mockResolvedValueOnce(
+      errorResponse(409, 'idempotency_conflict', 'Start a new checkout.'),
+    );
+    fetchMock.mockResolvedValueOnce(jsonResponse({ key_id: 'rzp_test', subscription_id: 'sub_3' }));
+
+    await expect(beginCheckout('pro')).rejects.toMatchObject({ code: 'idempotency_conflict' });
+    const failed = JSON.parse(sentRequest().init.body as string).idempotency_key;
+
+    await beginCheckout('pro');
+    const next = JSON.parse(fetchMock.mock.calls[1][1].body as string).idempotency_key;
+
+    expect(next).not.toBe(failed);
+  });
+
+  it('keeps the key when the outcome is unknown, so a retry cannot double charge', async () => {
+    // The opposite requirement: a 503 or a dropped connection may have reached
+    // Razorpay, so the retry has to replay the stored result under the same key.
+    fetchMock.mockResolvedValueOnce(errorResponse(503, 'billing_failed', 'Unknown outcome.'));
+    fetchMock.mockResolvedValueOnce(jsonResponse({ key_id: 'rzp_test', subscription_id: 'sub_4' }));
+
+    await expect(beginCheckout('pro')).rejects.toMatchObject({ ambiguous: true });
+    const unknown = JSON.parse(sentRequest().init.body as string).idempotency_key;
+
+    await beginCheckout('pro');
+    const retry = JSON.parse(fetchMock.mock.calls[1][1].body as string).idempotency_key;
+
+    expect(retry).toBe(unknown);
+  });
+
+  it('keeps the key when the network fails outright', async () => {
+    fetchMock.mockRejectedValueOnce(new Error('offline'));
+    fetchMock.mockResolvedValueOnce(jsonResponse({ key_id: 'rzp_test', subscription_id: 'sub_5' }));
+
+    await expect(beginCheckout('pro')).rejects.toMatchObject({ code: 'billing_unreachable' });
+    const unknown = JSON.parse(sentRequest().init.body as string).idempotency_key;
+
+    await beginCheckout('pro');
+    const retry = JSON.parse(fetchMock.mock.calls[1][1].body as string).idempotency_key;
+
+    expect(retry).toBe(unknown);
   });
 });
 

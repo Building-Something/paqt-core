@@ -198,6 +198,17 @@ export interface CheckoutError {
   gracePeriodEnd?: number | null;
   newPlanName?: string | null;
   currentPlanName?: string | null;
+  /**
+   * True when the outcome is genuinely unknown: the request may or may not have
+   * been processed. A checkout that failed this way must be retried with the
+   * *same* idempotency key so the stored result is replayed, never with a new
+   * one, which would start a second billing operation.
+   *
+   * A definitive rejection (4xx) is the opposite: nothing was created, so the
+   * next attempt must mint a fresh key. Reusing the old one makes the server
+   * refuse the request as a reused key with different details.
+   */
+  ambiguous?: boolean;
 }
 
 export interface RazorpayCheckout {
@@ -253,6 +264,14 @@ export interface SubscriptionInfo {
    * renewal is stopped, but Razorpay is not the thing holding the schedule.
    */
   providerCancelledImmediately?: boolean;
+  /**
+   * True when Razorpay has closed the subscription but Paqt is still honouring
+   * the paid period up to `periodEnd`. Derived from stored state on every read,
+   * so it survives a reload — unlike `providerCancelledImmediately`, which only
+   * describes the cancel call that produced it. Resuming is impossible in this
+   * state, so the UI must not offer it.
+   */
+  providerEnded?: boolean;
   pendingPlanId: string | null;
   pendingPlanName: string | null;
   pendingChangeAt: number | null;
@@ -319,6 +338,7 @@ async function callBillingEdge(name: string, body?: unknown): Promise<Record<str
     throw {
       code: 'billing_unreachable',
       message: 'The billing service could not be reached. Check your connection and try again.',
+      ambiguous: true,
     } satisfies CheckoutError;
   }
   const parsed = (await response.json().catch(() => ({}))) as Record<string, unknown>;
@@ -333,6 +353,9 @@ async function callBillingEdge(name: string, body?: unknown): Promise<Record<str
       gracePeriodEnd: toMs(error.grace_period_end),
       newPlanName: toStringOrNull(error.new_plan_name),
       currentPlanName: toStringOrNull(error.current_plan_name),
+      // 5xx means the handler may have got far enough to create something at
+      // Razorpay before failing, so the outcome is unknown.
+      ambiguous: response.status >= 500,
     } satisfies CheckoutError;
   }
   return parsed;
@@ -370,14 +393,28 @@ export async function beginCheckout(
   planId: string,
   options: { paymentMethod?: 'same' | 'new'; confirmReplacingPaidPeriod?: boolean } = {},
 ): Promise<RazorpayCheckout> {
-  const body = await callBillingEdge('create-checkout-session', {
-    plan_id: planId,
-    // A fresh key per attempt: confirming changes what the server is being asked
-    // to do, and a replayed key with different details is refused.
-    idempotency_key: checkoutIdempotencyKey(),
-    ...(options.paymentMethod === 'new' ? { payment_method: 'new' } : {}),
-    ...(options.confirmReplacingPaidPeriod ? { confirm_replacing_grace: true } : {}),
-  });
+  let body: Record<string, unknown>;
+  try {
+    body = await callBillingEdge('create-checkout-session', {
+      plan_id: planId,
+      // A fresh key per attempt: confirming changes what the server is being asked
+      // to do, and a replayed key with different details is refused.
+      idempotency_key: checkoutIdempotencyKey(),
+      ...(options.paymentMethod === 'new' ? { payment_method: 'new' } : {}),
+      ...(options.confirmReplacingPaidPeriod ? { confirm_replacing_grace: true } : {}),
+    });
+  } catch (err) {
+    // A rejected attempt must not poison the next one. The key is tied to the
+    // request details, so carrying it into a changed attempt (a different plan,
+    // or a confirmation the previous attempt never had) made the server refuse it
+    // as a reused key and the customer could never get past the error. Only an
+    // ambiguous outcome keeps its key, because there the request may have been
+    // processed and the retry has to replay the stored result.
+    if (!(err as CheckoutError)?.ambiguous) {
+      resetCheckoutIdempotencyKey();
+    }
+    throw err;
+  }
   if (body.switched === true) {
     return {
       key: typeof body.key_id === 'string' ? body.key_id : '',
@@ -532,6 +569,7 @@ function normalizeSubscriptionInfo(body: Record<string, unknown>): SubscriptionI
     cancelsAtPeriodEnd: body.cancels_at_period_end === true,
     canceledImmediately: body.canceled_immediately === true,
     providerCancelledImmediately: body.provider_cancelled_immediately === true,
+    providerEnded: body.provider_ended === true,
     pendingPlanId: toStringOrNull(body.pending_plan_id),
     pendingPlanName: toStringOrNull(body.pending_plan_name),
     pendingChangeAt: toMs(body.pending_change_at),

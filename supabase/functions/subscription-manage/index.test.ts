@@ -268,4 +268,88 @@ describe('resume', () => {
     expect((await body(response)).resumed).toBe(false);
     expect(rz.calls.some((c) => c.url.endsWith('/cancel_scheduled_changes'))).toBe(false);
   });
+
+  // Razorpay refuses a deferred cancellation for some payment modes (UPI), so
+  // Paqt cancels at the provider and keeps honouring the period it already paid
+  // for. There is then no live subscription left to resume, and the customer has
+  // NOT lost access — which is what the old `no_subscription` reply implied.
+  describe('provider ended but the paid period is still running', () => {
+    const HELD_STATE = {
+      has_subscription: true,
+      status: 'canceling',
+      plan_id: 'individual',
+      plan_name: 'Individual',
+      razorpay_customer_id: 'cust_1',
+      razorpay_subscription_id: 'sub_dead',
+      razorpay_status: 'cancelled',
+      cancel_at_period_end: true,
+      period_start: NOW - 10 * DAY,
+      period_end: NOW + 20 * DAY,
+    };
+
+    beforeEach(async () => {
+      // `loadHandler` binds the fake admin to the current `db`, so swapping the
+      // state means reloading the handler too.
+      db = signedIn(HELD_STATE);
+      handler = await loadHandler();
+      // Nothing live upstream: the provider has already closed it.
+      installRazorpay({ byId: {} });
+    });
+
+    it('explains that access continues and only renewal is gone, not the plan', async () => {
+      const response = await handler(post({ action: 'resume' }));
+
+      expect(response.status).toBe(409);
+      const error = (await body(response)).error;
+      expect(error.code).toBe('provider_ended_period_held');
+      expect(error.message).toContain('stays active until');
+      expect(error.message).toContain('will not renew');
+      expect(error.message).not.toContain('Choose a plan to subscribe again');
+      expect(error.period_end).toBe(NOW + 20 * DAY);
+    });
+
+    it('flags the state durably on a plain status read, so a reload agrees', async () => {
+      const response = await handler(post({ action: 'status' }));
+
+      expect(response.status).toBe(200);
+      expect((await body(response)).provider_ended).toBe(true);
+    });
+
+    it('does not claim the provider ended a genuinely scheduled cancellation', async () => {
+      db = signedIn({
+        ...HELD_STATE,
+        razorpay_status: 'active',
+        razorpay_subscription_id: 'sub_live',
+      });
+      handler = await loadHandler();
+      installRazorpay({ byId: { sub_live: liveSubscription({ cancel_at_cycle_end: true }) } });
+
+      const response = await handler(post({ action: 'status' }));
+
+      expect(response.status).toBe(200);
+      // False keeps "Keep my plan" on screen, where it still works.
+      expect((await body(response)).provider_ended).toBe(false);
+    });
+
+    it('does not flag a provider-ended period that has already run out', async () => {
+      db = signedIn({ ...HELD_STATE, period_end: NOW - DAY });
+      handler = await loadHandler();
+
+      const response = await handler(post({ action: 'status' }));
+
+      expect(response.status).toBe(200);
+      expect((await body(response)).provider_ended).toBe(false);
+    });
+  });
+
+  it('still reports a plain no-subscription when nothing was ever paid', async () => {
+    db = signedIn(null);
+    handler = await loadHandler();
+    installRazorpay({ byId: {} });
+
+    const response = await handler(post({ action: 'resume' }));
+
+    expect(response.status).toBe(409);
+    expect((await body(response)).error.code).toBe('no_subscription');
+  });
 });

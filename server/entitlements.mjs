@@ -52,6 +52,46 @@ export function isBillingConfigured() {
   return configured;
 }
 
+let accessCheck = null;
+
+/**
+ * Confirms the service key is actually accepted by Supabase, once per process.
+ *
+ * A present-but-rotated key is the worst case here: `isBillingConfigured` only
+ * checks that the string is non-empty, so every privileged call then failed
+ * quietly — `verifyUser` returned null for everyone (surfacing as a bogus
+ * "Sign in to use Paqt") and `isPlanActive` failed closed (surfacing as
+ * "plan_required" for paying customers). Nothing was logged, so it looked like
+ * an app bug rather than a credential that needed replacing.
+ */
+export async function verifyBillingAccess() {
+  if (!isBillingConfigured()) {
+    return false;
+  }
+  if (accessCheck !== null) {
+    return accessCheck;
+  }
+  try {
+    // `subscriptions` is readable only by service_role, so a rejection here is
+    // the key being refused, not the table being empty.
+    const { error } = await admin.from('subscriptions').select('id').limit(1);
+    if (error) {
+      accessCheck = false;
+      console.error(
+        `[paqt] SUPABASE_SERVICE_ROLE_KEY was rejected by Supabase (${error.status ?? 'no status'}: ${error.message}). ` +
+          'Authentication, plan checks and quotas are all disabled until this is fixed. ' +
+          'If the key was rotated, copy the current one from Project Settings > API Keys into .env and restart.',
+      );
+    } else {
+      accessCheck = true;
+    }
+  } catch (err) {
+    accessCheck = false;
+    console.error('[paqt] could not verify SUPABASE_SERVICE_ROLE_KEY:', err?.message ?? err);
+  }
+  return accessCheck;
+}
+
 /** Verifies a Supabase access token and returns { userId } or null. */
 export async function verifyUser(authHeader) {
   if (!isBillingConfigured()) {

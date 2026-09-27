@@ -64,6 +64,37 @@ const SUBSCRIPTION_EVENTS = new Set([
   'subscription.paused',
 ]);
 
+/**
+ * Decodes the request body into events.
+ *
+ * Razorpay's dashboard default is `application/x-www-form-urlencoded` with the
+ * event JSON inside a `payload` field, so a real delivery is not valid JSON.
+ * Parsing JSON only made every live event fail with "Event body must be JSON"
+ * while hand-written tests that posted JSON passed. Both encodings are accepted;
+ * the signature has already been verified over these exact bytes by this point.
+ */
+function parseEventBody(raw: string): RazorpayEvent[] | null {
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      return Array.isArray(parsed) ? (parsed as RazorpayEvent[]) : [parsed as RazorpayEvent];
+    } catch {
+      return null;
+    }
+  }
+  const payload = new URLSearchParams(trimmed).get('payload');
+  if (!payload) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(payload);
+    return Array.isArray(parsed) ? (parsed as RazorpayEvent[]) : [parsed as RazorpayEvent];
+  } catch {
+    return null;
+  }
+}
+
 interface ProcessResult {
   handled: boolean;
   /** Resolved from Razorpay metadata; null when the account cannot be identified. */
@@ -397,16 +428,15 @@ Deno.serve(async (req) => {
     return jsonError(400, 'bad_request', 'Invalid signature.', req);
   }
 
-  let parsed: unknown;
+  let events: RazorpayEvent[] | null;
   try {
-    parsed = JSON.parse(raw);
+    events = parseEventBody(raw);
   } catch {
-    return jsonError(400, 'bad_request', 'Event body must be JSON.', req);
+    events = null;
   }
-
-  const events: RazorpayEvent[] = Array.isArray(parsed)
-    ? (parsed as RazorpayEvent[])
-    : [parsed as RazorpayEvent];
+  if (!events) {
+    return jsonError(400, 'bad_request', 'Event body could not be read.', req);
+  }
 
   const admin = createAdmin();
   let handled = 0;

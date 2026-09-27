@@ -233,9 +233,15 @@ Deno.serve(async (req) => {
     // Razorpay can end a subscription while the period it was paid for is still
     // running (it refuses a scheduled cancel for UPI, so Paqt cancels at the
     // provider and holds the period itself). There is then no live subscription
-    // and nothing left that can double-charge, so a new one is safe to create.
-    // It is not free, though: the unused days are not prorated, refunded or
-    // transferred, so this is confirmed before any payment is started.
+    // and nothing left that can double-charge.
+    //
+    // The switch is made straight away rather than asking: the new subscription
+    // is created with `start_at` at the end of the paid period (see
+    // `residualStartSec`), so the customer is not charged a second time for days
+    // they already paid for, and the response says when the new plan begins.
+    // Bouncing this back as a 409 to be confirmed only produced an error in the
+    // console and a dialog the customer had to interpret before the same
+    // automatic outcome.
     const graceEndsAt =
       !live?.id &&
       state?.status === 'canceling' &&
@@ -245,25 +251,6 @@ Deno.serve(async (req) => {
       state.period_end > Date.now()
         ? state.period_end
         : null;
-    if (graceEndsAt !== null && body.confirm_replacing_grace !== true) {
-      const on = new Date(graceEndsAt).toLocaleDateString('en-IN', {
-        day: 'numeric',
-        month: 'short',
-      });
-      const next = plan.name;
-      throw new HttpError(
-        409,
-        'grace_period_replacement_required',
-        `Your ${state?.plan_name ?? 'current'} plan is paid until ${on} and will not renew. ${next} starts on ${on}, and you are charged then — nothing is charged today.`,
-        {
-          grace_period_end: graceEndsAt,
-          new_plan_id: planId,
-          new_plan_name: next,
-          current_plan_id: state?.plan_id ?? null,
-          current_plan_name: state?.plan_name ?? null,
-        },
-      );
-    }
 
     // ---- A live, paid subscription already exists ------------------------
     // The status must prove a charge landed: a `created` subscription also

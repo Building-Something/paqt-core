@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
   isBillingConfigured,
+  verifyBillingAccess,
   verifyUser,
   isPlanActive,
   consume,
@@ -268,6 +269,20 @@ export async function groqProxyHandler(req, res) {
   let userId = null;
   let consumedOp = null;
   let consumedRunId = null;
+
+  if (isBillingConfigured() && !(await verifyBillingAccess())) {
+    // Configured but rejected. Answering 401 here would tell a signed-in paying
+    // customer to sign in again, which is both useless and untrue.
+    sendError(
+      res,
+      createError(
+        503,
+        'billing_unavailable',
+        'Billing is temporarily unavailable. Please try again shortly.',
+      ),
+    );
+    return;
+  }
 
   if (isBillingConfigured()) {
     const auth = await verifyUser(req.headers.authorization);

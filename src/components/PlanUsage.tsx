@@ -180,11 +180,10 @@ export function PlanUsageCard({ compact = false }: { compact?: boolean }) {
 
   const active = isPlanActive(usage);
   const canceling = isPlanCanceling(usage);
-  // Set when Razorpay refused to schedule the cycle-end cancel and Paqt stopped it
-  // at the provider instead. Resuming is then impossible, so the UI must not offer
-  // "Keep my plan". Held in component state on purpose: a durable flag would need
-  // the provider status in the profile mirror, and the resume call already
-  // explains the situation truthfully if this is lost on reload.
+  // Set when Razorpay has closed the subscription but Paqt is still honouring the
+  // paid period: resuming is impossible, so the UI must not offer "Keep my plan".
+  // The `status` probe below seeds this from the server's durable `provider_ended`
+  // flag, so it survives a reload instead of only living since the cancel.
   const [providerEnded, setProviderEnded] = useState(false);
   useEffect(() => {
     if (!canceling) {
@@ -209,7 +208,11 @@ export function PlanUsageCard({ compact = false }: { compact?: boolean }) {
     if (loading || !usage.signedIn) {
       return;
     }
-    if (isPlanActive(usage)) {
+    // A cancelling subscription still counts as active, so this probe used to skip
+    // exactly the customers who need it: the ones whose provider subscription is
+    // gone but whose paid period is still running. That left "Keep my plan" on
+    // screen after a reload, pointing at a resume Razorpay cannot honour.
+    if (isPlanActive(usage) && !isPlanCanceling(usage)) {
       // Re-arm, so signing in as somebody else probes their billing too.
       reconciledFor.current = null;
       return;
@@ -222,7 +225,11 @@ export function PlanUsageCard({ compact = false }: { compact?: boolean }) {
     let cancelled = false;
     void manageSubscription()
       .then((info) => {
-        if (!cancelled && info.reconciled) {
+        if (cancelled) {
+          return;
+        }
+        setProviderEnded(info.providerEnded === true);
+        if (info.reconciled) {
           const name = PLANS.find((plan) => plan.id === info.planId)?.name ?? 'Your plan';
           toast('info', `We re-synced your billing with Razorpay — ${name} is active again. You were not charged.`);
         }
@@ -301,7 +308,7 @@ export function PlanUsageCard({ compact = false }: { compact?: boolean }) {
     try {
       const info = await cancelSubscription();
       setConfirmCancelOpen(false);
-      setProviderEnded(info.providerCancelledImmediately === true);
+      setProviderEnded(info.providerCancelledImmediately === true || info.providerEnded === true);
       toast('info', cancelMessage(info));
       void refresh();
     } catch (caught) {
@@ -337,10 +344,14 @@ export function PlanUsageCard({ compact = false }: { compact?: boolean }) {
         <div>
           <h2 className="text-sm font-semibold text-foreground">Plan &amp; billing</h2>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            {canceling && !providerEnded
-              ? `${usage.planName ?? 'Your plan'} cancelled · stays active until ${new Date(
+            {canceling
+              ? `${usage.planName ?? 'Your plan'} stays active until ${new Date(
                   usage.periodEnd ?? Date.now(),
-                ).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}`
+                ).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}${
+                  // Razorpay has closed the subscription, so unlike a scheduled
+                  // cancellation this one cannot be undone from here.
+                  providerEnded ? ' · will not renew' : ' · cancelled'
+                }`
               : active
                 ? `${usage.planName ?? 'Active plan'}${
                     usage.periodEnd

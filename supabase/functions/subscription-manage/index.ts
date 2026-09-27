@@ -19,6 +19,7 @@ import {
   hasBeenCharged,
   hasPaidPeriod,
   isLiveStatus,
+  isProviderEnded,
   listSubscriptions,
   mapRazorpayStatus,
   resume as resumeSubscription,
@@ -35,6 +36,26 @@ import {
 
 interface ManageRequest {
   action?: unknown;
+}
+
+/**
+ * True when the payment provider has closed the subscription but Paqt is still
+ * honouring a period that was already paid for.
+ *
+ * This is derived from stored state on every read rather than remembered from
+ * the cancel that caused it, so the client still knows after a reload. That
+ * matters because "resume" is genuinely impossible in this state: there is no
+ * live subscription left at Razorpay to undo a cancellation on.
+ */
+function providerEndedWithHeldPeriod(state: BillingState | null): boolean {
+  return (
+    state !== null &&
+    state.status === 'canceling' &&
+    state.cancel_at_period_end === true &&
+    isProviderEnded(state.razorpay_status) &&
+    typeof state.period_end === 'number' &&
+    state.period_end > Date.now()
+  );
 }
 
 function clientView(state: BillingState | null, extra: Record<string, unknown> = {}): Record<string, unknown> {
@@ -54,6 +75,9 @@ function clientView(state: BillingState | null, extra: Record<string, unknown> =
     pending_plan_name: state?.pending_plan_name ?? null,
     pending_change_at: state?.pending_change_at ?? null,
     pending_change_kind: state?.pending_change_kind ?? null,
+    // Durable, so the UI can hide "Keep my plan" after a reload instead of
+    // offering a resume that the provider can no longer honour.
+    provider_ended: providerEndedWithHeldPeriod(state),
     ...extra,
   };
 }
@@ -152,6 +176,22 @@ Deno.serve(async (req) => {
 
     const live = await resolveTargetSubscription(admin, user.id, state);
     if (!live?.id) {
+      // The provider may have closed the subscription while Paqt is still
+      // honouring the period that was paid for. Saying "cancelled, choose a plan
+      // again" there is wrong: they still have their plan, and "keep renewing" is
+      // not on offer because there is nothing left at Razorpay to resume.
+      if (providerEndedWithHeldPeriod(state)) {
+        const on = new Date(state!.period_end!).toLocaleDateString('en-IN', {
+          day: 'numeric',
+          month: 'short',
+        });
+        throw new HttpError(
+          409,
+          'provider_ended_period_held',
+          `Your ${state?.plan_name ?? 'plan'} stays active until ${on}, but it will not renew: the payment provider has closed the subscription. Choose a plan to start a new one.`,
+          { period_end: state?.period_end ?? null, plan_id: state?.plan_id ?? null },
+        );
+      }
       // Either there was never a subscription, or Razorpay has ended it. Both mean
       // the same thing to the customer, and the local row has been reconciled.
       throw new HttpError(

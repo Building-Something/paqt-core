@@ -159,6 +159,55 @@ describe('webhook signature gate', () => {
 });
 
 describe('verified event handling', () => {
+  // Razorpay posts `application/x-www-form-urlencoded` with the event inside a
+  // `payload` field, not JSON. This is the shape every real delivery uses, and
+  // it is what was being rejected, so it is pinned here rather than assumed.
+  it('accepts the form-encoded body Razorpay actually sends', async () => {
+    const raw = new URLSearchParams({ payload: JSON.stringify(activatedEvent()) }).toString();
+    const response = await handler(
+      new Request('https://project.supabase.co/functions/v1/razorpay-webhook', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'x-razorpay-signature': sign(raw),
+        },
+        body: raw,
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(rpcCallCount(db, 'paqt_claim_webhook_event')).toBe(1);
+    expect(rpcCallCount(db, 'paqt_upsert_subscription')).toBe(1);
+  });
+
+  it('rejects a form-encoded body whose signature was made over the JSON instead', async () => {
+    // The signature covers the raw bytes, so re-encoding the body after signing
+    // must not slip through.
+    const json = JSON.stringify(activatedEvent());
+    const raw = new URLSearchParams({ payload: json }).toString();
+
+    const response = await handler(
+      new Request('https://project.supabase.co/functions/v1/razorpay-webhook', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'x-razorpay-signature': sign(json),
+        },
+        body: raw,
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(rpcCallCount(db, 'paqt_claim_webhook_event')).toBe(0);
+  });
+
+  it('still rejects a body with no event in it', async () => {
+    const raw = 'not=an-event';
+    const response = await handler(post(raw, sign(raw)));
+
+    expect(response.status).toBe(400);
+  });
+
   it('applies an authentic subscription.activated event', async () => {
     const raw = JSON.stringify(activatedEvent());
     const response = await handler(post(raw, sign(raw)));
