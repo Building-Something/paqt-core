@@ -72,11 +72,11 @@ const DETAILS = [
     icon: ShieldCheck,
     title: 'Private by design',
     description:
-      'Paqt is built around a small, honest data footprint: guest workspace, local history, server-side keys.',
+      'Paqt is built around a small, honest data footprint: a private account, synced history, server-side keys.',
     bullets: [
-      'No account or sign-up — the whole workspace is your browser',
+      'Your reviews save to your private account and sync across devices',
       'AI credentials live on the server and never ship to the browser',
-      'No database at this stage: nothing is permanently stored',
+      'Documents are never sold, shared, or used for anything beyond your own analysis',
     ],
   },
 ];

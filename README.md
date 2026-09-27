@@ -105,6 +105,35 @@ Paqt uses **Supabase** for authentication and account storage. Sign-up/sign-in a
 3. Open the Dashboard **SQL editor**, paste the contents of `supabase/schema.sql`, and run it. That file creates the `documents` table with per-user RLS (users only ever read/write their own rows) and extracted-page-text retention. Then run `supabase/storage.sql` to create the private `documents` bucket and its owner-scoped policies for previews/PDFs. (If `storage.sql` reports `permission denied for schema storage`, your editor role can't touch the managed `storage` schema — create the bucket named `documents` (private) via the Dashboard **Storage** UI instead, then skip that file; everything except PDF retention/thumbnails still works.)
 4. Restart `npm run dev` (`.env` is read at boot).
 
+### Plans & billing (Razorpay subscriptions)
+
+`/analyze`, `/generate`, and `/analysis` are gated behind an **active subscription**. Sign-up stays free; analysis and drafting require a paid plan (₹2,999/mo Individual, ₹5,999/mo Pro). Billing state lives entirely in Supabase (`plans`, `subscriptions`, `payments_customers`, `payment_events`) — the browser only *reads* its own row, so any login anywhere reflects the true plan.
+
+Setup:
+
+1. **Create Razorpay plans.** In the Razorpay Dashboard → Plans, create the two monthly plans and copy their `plan_...` ids.
+2. **Map prices to plans** (SQL editor, after `schema.sql`):
+   ```sql
+   update public.plans set price_id = 'plan_...' where id = 'individual';
+   update public.plans set price_id = 'plan_...' where id = 'pro';
+   ```
+3. **Deploy the edge functions** (they run with the service-role key; plan IDs are resolved from `price_id`):
+   ```bash
+   supabase secrets set RAZORPAY_KEY_ID=... RAZORPAY_KEY_SECRET=... RAZORPAY_WEBHOOK_SECRET=...
+   supabase functions deploy create-checkout-session --no-verify-jwt
+   supabase functions deploy subscription-manage --no-verify-jwt
+   supabase functions deploy razorpay-webhook --no-verify-jwt
+   ```
+4. **Wire the webhook.** Razorpay Dashboard → Settings → Webhooks → add `https://<project-ref>.supabase.co/functions/v1/razorpay-webhook` with the secret above, subscribing to `subscription.activated/charged/resumed/updated/pending/completed/cancelled/paused/halted` and `payment.authorized/captured/failed/refunded` + `refund.processed`. The handler verifies the HMAC-SHA256 signature and re-fetches the authoritative Razorpay subscription on every event, so state never depends on a specific payload shape.
+5. **Enable server-side enforcement** (optional but recommended). Add to `.env`:
+   ```
+   SUPABASE_URL=https://<project-ref>.supabase.co
+   SUPABASE_SERVICE_ROLE_KEY=sb_secret_service_role_...
+   ```
+   `/api/groq` then validates the caller's access token and returns `402 plan_required` when there's no active subscription. When those two variables are absent, the proxy skips enforcement (local dev).
+
+Behavior notes: **autopay is ON by default** at checkout (the UI says so), with cancel/upgrade/downgrade in Settings → Plan & billing. Cancelling at the cycle end keeps access until the paid period ends (`cancel_at_cycle_end: true`). Upgrades/downgrades are scheduled via `schedule_change_at: 'cycle_end'` so they take effect exactly when the current period ends, and the stored row goes `active` again the moment the webhook sees a fresh cycle.
+
 ### How history is stored (the storage-efficient model)
 
 To keep the free tier healthy across a 300–500 user base, Paqt stores a compact **row + preview + PDF** combination — never the full contract text in the DB:
@@ -136,7 +165,7 @@ If the free tier is too slow for production use, upgrade to the Groq Developer p
 2. **Questions** → answers (or skips) → a full legal-style Markdown agreement with numbered sections (`## 1. …`, `### 1.1 …`), WHEREAS recitals, placeholder brackets like `[Client Full Legal Name]`, and a `## SIGNATURES` section (`src/services/draftService.ts`).
 3. **Draft** → Markdown is converted to TipTap editor JSON (`markdownToDoc` in `src/utils/contractDocument.ts`) and opened in a rich text editor (StarterKit + Underline + TextAlign) on the left, styled like a legal document in `Liberation Serif`. Edits flow back through `docToMarkdown` and are autosaved to history (debounced), plus persisted to `draftDoc` so the exact formatting is preserved on reopen.
 4. **Revise** → a natural-language instruction rewrites the whole agreement consistently.
-5. **Export PDF** → `pdfExportService` loads the Liberation Serif TTFs (TTF → base64 → pdfmake vfs), builds a letter-size legal layout (`buildContractPdfDoc`: margins, title block, justified sections, uppercase section headings, page footer, auto-generated signature lines after IN WITNESS WHEREOF), and downloads the PDF.
+5. **Export PDF** → `pdfExportService` loads the Liberation Serif TTFs (TTF → base64 → pdfmake vfs), builds a letter-size legal layout (`buildContractPdfDoc`: 1-inch margins, centered title block, justified sections, uppercase section headings, and auto-generated signature lines after IN WITNESS WHEREOF), and downloads the PDF.
 6. **Analyze for risks** → the live Markdown of the draft becomes analysis pages and runs through the same review pipeline (`beginWithText`).
 
 ## Client-side history
@@ -151,7 +180,7 @@ Entries are written on analysis completion and draft generation, and are re-open
 ## Verified routes (production server)
 
 ```bash
-curl http://localhost:3001/api/health      # {"configured":true} when GROQ_API_KEY is set
+curl http://localhost:3001/api/health      # {"configured":true,"billingConfigured":false} (billing ON once SUPABASE_URL + service role are set)
 curl http://localhost:3001/                # SPA
 curl http://localhost:3001/analyze         # SPA fallback
 ```
@@ -189,6 +218,9 @@ purpose:
   - `src/utils/contractDocument.test.ts` — markdown ↔ editor-JSON round-trips, marks,
 
     flattening, signature detection, and the pdfmake doc-definition structure.
+  - `src/services/billingService.test.ts` — the plan gate rule (`hasActivePlan`), pending
+
+    change/autopay derivation, and INR/paise formatting helpers.
 
 Add a test alongside any new feature; run `npm run test:watch` while developing.
 

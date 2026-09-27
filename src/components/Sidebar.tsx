@@ -1,5 +1,6 @@
 import { Link, NavLink, useNavigate } from 'react-router-dom';
 import {
+  CreditCard,
   FilePenLine,
   FilePlus2,
   Home,
@@ -10,6 +11,7 @@ import {
 } from 'lucide-react';
 import { useAnalysis } from '../contexts/AnalysisContext';
 import { useAuth } from '../contexts/AuthContext';
+import { usePlan } from '../contexts/PlanContext';
 import { useToast } from '../contexts/ToastContext';
 import { useServerHealth } from '../hooks/useServerHealth';
 import { Button } from './ui/button';
@@ -72,6 +74,7 @@ const NAV_SECTIONS = [
     label: 'Resources',
     links: [
       { to: '/', label: 'Site home', icon: Home, end: true },
+      { to: '/pricing', label: 'Pricing', icon: CreditCard, end: false },
       { to: '/settings', label: 'Settings', icon: Settings2, end: false },
     ],
   },
@@ -132,6 +135,7 @@ function UserCard() {
 
 export function Sidebar() {
   const { user } = useAuth();
+  const { hasAccess, loading } = usePlan();
 
   return (
     <>
@@ -157,6 +161,16 @@ export function Sidebar() {
               </nav>
             </div>
           ))}
+
+          {!loading && !hasAccess ? (
+            <Link
+              to="/pricing"
+              className="flex items-center justify-between rounded-lg border border-primary/30 bg-primary/5 px-3 py-2.5 text-sm font-medium text-primary transition-colors hover:bg-primary/10"
+            >
+              <span>Get a plan to analyze</span>
+              <CreditCard className="size-4" aria-hidden="true" />
+            </Link>
+          ) : null}
         </div>
 
         <div className="border-t border-border p-3">
@@ -189,6 +203,12 @@ export function Sidebar() {
               className="rounded-md px-2.5 py-1.5 text-sm font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
             >
               Draft
+            </Link>
+            <Link
+              to="/pricing"
+              className="rounded-md px-2.5 py-1.5 text-sm font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
+            >
+              Plans
             </Link>
             <span className="ml-1">
               <ThemeToggle />

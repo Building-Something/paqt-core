@@ -1,7 +1,8 @@
 import { Link, useLocation, useNavigate, Outlet } from 'react-router-dom';
-import { ChevronRight, FilePlus2, LogOut } from 'lucide-react';
+import { ChevronRight, CreditCard, FilePlus2, LogOut } from 'lucide-react';
 import { useAnalysis } from '../contexts/AnalysisContext';
 import { useAuth } from '../contexts/AuthContext';
+import { usePlan } from '../contexts/PlanContext';
 import { useToast } from '../contexts/ToastContext';
 import { Button } from './ui/button';
 import { ThemeToggle } from './ThemeToggle';
@@ -20,17 +21,22 @@ const TITLE_BY_PATH: Record<string, string> = {
   '/analyze': 'Review documents',
   '/generate': 'Draft agreements',
   '/analysis': 'Workspace',
+  '/settings': 'Settings',
   '/about': 'About',
   '/privacy': 'Privacy',
 };
 
 function UserMenu() {
   const { user, signOut } = useAuth();
+  const { plans, subscription, hasAccess } = usePlan();
   const { reset } = useAnalysis();
   const navigate = useNavigate();
   const { toast } = useToast();
 
   const initial = (user?.email ?? '?').charAt(0).toUpperCase();
+  const planName = hasAccess
+    ? plans.find((plan) => plan.id === subscription?.plan_id)?.name ?? null
+    : null;
 
   async function handleSignOut() {
     await signOut();
@@ -51,6 +57,14 @@ function UserMenu() {
         <DropdownMenuLabel className="truncate">
           {user?.email ?? 'Account'}
         </DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          className="cursor-pointer"
+          onSelect={() => navigate(hasAccess ? '/settings' : '/pricing')}
+        >
+          <CreditCard className="size-4" aria-hidden="true" />
+          {hasAccess ? `Plan: ${planName ?? 'Active'}` : 'Choose a plan'}
+        </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem
           className="cursor-pointer text-destructive focus:bg-destructive/10 focus:text-destructive"

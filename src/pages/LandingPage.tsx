@@ -114,7 +114,7 @@ const FAQS = [
   {
     question: 'What do I need to get started?',
     answer:
-      'Create a free account, then open your workspace. Analysis features also need a GROQ_API_KEY configured on the server side (set in .env) — the key never ships to the browser.',
+      'Create a free account, then open your workspace. Analysis and drafting are available on paid plans — signup is free, and you can cancel anytime from Settings.',
   },
 ];
 
@@ -536,8 +536,8 @@ export function LandingPage() {
               Start with one contract.
             </h2>
             <p className="mx-auto mt-3 max-w-xl text-sm leading-relaxed text-muted-foreground sm:text-base">
-              Create a free account, no credit card. Open your workspace and upload your first
-              document — or compose an agreement from a plain-English brief.
+              Create a free account. Choose a plan when you’re ready, open your workspace, and upload
+              your first document — or compose an agreement from a plain-English brief.
             </p>
             <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
               <Button size="lg" className="group" asChild>

@@ -11,6 +11,7 @@ import type { RealtimeChannel, Session, User } from '@supabase/supabase-js';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import { bindHistoryToUser, unbindHistoryToUser } from '../services/historyService';
 import { clearRemoteHistory } from '../services/supabaseHistoryService';
+import { setGroqAccessToken } from '../services/groqService';
 
 export interface AuthActionResult {
   ok: boolean;
@@ -137,6 +138,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let alive = true;
     if (!supabase) {
+      setGroqAccessToken(null);
       setInitializing(false);
       return () => {
         alive = false;
@@ -174,6 +176,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       subscription.subscription.unsubscribe();
     };
   }, []);
+
+  // Keep the /api/groq proxy authorization in sync with the live session,
+  // including local sign-outs driven by the liveness poll or cross-device
+  // broadcast above.
+  useEffect(() => {
+    setGroqAccessToken(session?.access_token ?? null);
+  }, [session]);
 
   useEffect(() => {
     if (!supabase || !user?.id) {

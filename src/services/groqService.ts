@@ -40,6 +40,19 @@ export function getReasoningEffort(): ReasoningEffort {
   return reasoningEffort;
 }
 
+// The Supabase access token is attached to /api/groq so the server can verify
+// the caller's identity and plan in the privacy-scoped Node proxy. Kept at
+// module level and updated by AuthContext on every session change.
+let accessToken: string | null = null;
+
+export function setGroqAccessToken(token: string | null): void {
+  accessToken = token;
+}
+
+export function getGroqAccessToken(): string | null {
+  return accessToken;
+}
+
 interface GroqCompletionMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
@@ -112,9 +125,13 @@ async function callGroq(
 
   let response: Response;
   try {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (accessToken) {
+      headers.Authorization = `Bearer ${accessToken}`;
+    }
     response = await fetch('/api/groq', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(payload),
     });
   } catch (error) {
@@ -144,6 +161,13 @@ async function callGroq(
     const code = parsed?.error?.code || 'unknown';
     const message =
       parsed?.error?.message || 'The AI service returned an unexpected response.';
+
+    if (response.status === 402 || code === 'plan_required') {
+      throw new GroqServiceError('plan_required', message, 402);
+    }
+    if (response.status === 401 || code === 'auth_required') {
+      throw new GroqServiceError('auth_required', message, 401);
+    }
 
     if (code === 'rate_limited_daily') {
       throw new GroqServiceError(code, message, response.status);

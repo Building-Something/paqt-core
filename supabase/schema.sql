@@ -187,3 +187,153 @@ $$;
 
 revoke all on function public.delete_user() from public, anon, authenticated;
 grant execute on function public.delete_user() to authenticated;
+
+-- ============================================================
+-- Billing (Razorpay Subscriptions)
+--
+-- All writes are performed by Supabase Edge Functions using the
+-- service-role key (which bypasses RLS). The browser only ever
+-- READS its own subscription row so the UI can gate features on
+-- the database state — no client-side billing cache.
+--
+-- After running this section, set each plan's Razorpay price id
+-- once the plans exist in the Razorpay dashboard:
+--
+--   update public.plans set price_id = 'plan_...' where id = 'individual';
+--   update public.plans set price_id = 'plan_...' where id = 'pro';
+-- ============================================================
+
+-- ---- Public plan catalogue (safe for anon reads: pricing page) ----
+create table if not exists public.plans (
+  id text primary key,
+  name text not null,
+  tagline text,
+  price_inr integer not null check (price_inr > 0),
+  interval_months integer not null default 1 check (interval_months >= 1),
+  price_id text,
+  features jsonb not null default '[]'::jsonb,
+  popular boolean not null default false,
+  active boolean not null default true,
+  sort_key integer not null default 0,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- Seed the two plans. `price_id` is intentionally NOT overwritten on
+-- re-run so the manual dashboard mapping above survives.
+insert into public.plans (id, name, tagline, price_inr, interval_months, popular, sort_key, features)
+values
+  (
+    'individual',
+    'Individual',
+    'For someone reviewing a contract here and there.',
+    2999,
+    1,
+    false,
+    10,
+    '["Full contract analysis and risk scoring","Chat with your contract","Export your review"]'::jsonb
+  ),
+  (
+    'pro',
+    'Pro',
+    'For professionals who review contracts regularly.',
+    5999,
+    1,
+    true,
+    20,
+    '["Everything in Individual","Unlimited documents and reviews","Priority AI processing speed","Advanced cross-clause risk detection"]'::jsonb
+  )
+on conflict (id) do update
+  set name = excluded.name,
+      tagline = excluded.tagline,
+      price_inr = excluded.price_inr,
+      interval_months = excluded.interval_months,
+      popular = excluded.popular,
+      sort_key = excluded.sort_key,
+      features = excluded.features;
+
+alter table public.plans enable row level security;
+
+drop policy if exists "plans_select_all" on public.plans;
+create policy "plans_select_all"
+  on public.plans for select
+  to anon, authenticated
+  using (true);
+
+grant select on public.plans to anon, authenticated;
+
+-- ---- Per-user subscription state (gating source of truth) ----
+create table if not exists public.subscriptions (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users (id) on delete cascade,
+  razorpay_subscription_id text not null unique,
+  short_url text,
+  customer_id text,
+  plan_id text not null references public.plans (id),
+  pending_plan_id text references public.plans (id),
+  status text not null default 'created'
+    check (status in ('created','authenticated','active','pending','halted','cancelled','completed','expired')),
+  autopay boolean not null default true,
+  current_period_start bigint,
+  current_period_end bigint,
+  charge_at bigint,
+  ends_at bigint,
+  paid_count integer not null default 0,
+  total_count integer not null default 0,
+  last_payment_id text,
+  last_payment_amount bigint,
+  started_at bigint,
+  cancelled_at bigint,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists subscriptions_user_idx
+  on public.subscriptions (user_id);
+create index if not exists subscriptions_user_status_idx
+  on public.subscriptions (user_id, status);
+create index if not exists subscriptions_razorpay_idx
+  on public.subscriptions (razorpay_subscription_id);
+
+alter table public.subscriptions enable row level security;
+
+-- Users may read their own subscription so the app never caches billing.
+drop policy if exists "subscriptions_select_own" on public.subscriptions;
+create policy "subscriptions_select_own"
+  on public.subscriptions for select
+  to authenticated
+  using ((select auth.uid()) = user_id and public.is_active_user());
+
+grant select on public.subscriptions to authenticated;
+
+-- ---- Razorpay customer mapping (server-only write) ----
+create table if not exists public.payments_customers (
+  user_id uuid primary key references auth.users (id) on delete cascade,
+  customer_id text not null unique,
+  created_at timestamptz not null default now()
+);
+
+alter table public.payments_customers enable row level security;
+
+drop policy if exists "payments_customers_select_own" on public.payments_customers;
+create policy "payments_customers_select_own"
+  on public.payments_customers for select
+  to authenticated
+  using ((select auth.uid()) = user_id and public.is_active_user());
+
+grant select on public.payments_customers to authenticated;
+
+-- ---- Webhook audit log (service-role writes only; no client access) ----
+create table if not exists public.payment_events (
+  id bigint generated always as identity primary key,
+  event text not null,
+  razorpay_subscription_id text,
+  user_id uuid,
+  payload jsonb not null,
+  received_at timestamptz not null default now()
+);
+
+create index if not exists payment_events_razorpay_idx
+  on public.payment_events (razorpay_subscription_id);
+
+alter table public.payment_events enable row level security;

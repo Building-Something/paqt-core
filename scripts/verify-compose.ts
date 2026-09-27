@@ -103,8 +103,7 @@ const SAMPLE = [
   check('pdf defines LiberationSerif styles', typeof pdf.styles === 'object' && pdf.styles !== null);
   check('pdf body style uses serif font', (pdf.styles as Record<string, { font?: string }>).body?.font === 'LiberationSerif');
   check('pdf has content blocks', Array.isArray(pdf.content) && pdf.content.length > 0);
-  check('pdf header is a function', typeof pdf.header === 'function');
-  check('pdf footer is a function', typeof pdf.footer === 'function');
+  check('pdf avoids dynamic header/footer', pdf.header === undefined && pdf.footer === undefined);
   check(
     'pdf content includes the section heading',
     JSON.stringify(pdf.content).includes('1. SERVICES') && JSON.stringify(pdf.content).includes('2. FEES & PAYMENT'),
