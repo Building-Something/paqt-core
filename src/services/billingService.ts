@@ -185,6 +185,7 @@ export interface CheckoutSession {
   shortUrl: string | null;
   status: string;
   planId: string;
+  key: string;
 }
 
 export interface ManageResult {

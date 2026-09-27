@@ -5,6 +5,7 @@ import type { RazorpaySubscriptionEntity } from '../_shared/razorpay.ts';
 
 const supabaseUrl = Deno.env.get('SUPABASE_URL') || '';
 const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
+const razorpayKeyId = Deno.env.get('RAZORPAY_KEY_ID') || '';
 
 const supabase = createClient(supabaseUrl, serviceRoleKey, {
   auth: { persistSession: false, autoRefreshToken: false },
@@ -125,6 +126,7 @@ Deno.serve(async (req) => {
         shortUrl: sub.short_url || matching.short_url,
         status: sub.status,
         planId,
+        key: razorpayKeyId,
       });
     }
 
@@ -196,6 +198,7 @@ Deno.serve(async (req) => {
       shortUrl: subscription.short_url,
       status: subscription.status,
       planId,
+      key: razorpayKeyId,
     });
   } catch (error) {
     console.error('[checkout] failed:', error);
