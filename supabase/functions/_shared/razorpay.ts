@@ -1,226 +1,426 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
-import Razorpay from 'npm:razorpay@2';
+
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? '';
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
 const RAZORPAY_KEY_ID = Deno.env.get('RAZORPAY_KEY_ID') ?? '';
 const RAZORPAY_KEY_SECRET = Deno.env.get('RAZORPAY_KEY_SECRET') ?? '';
-export const razorpay = new Razorpay({
-  key_id: RAZORPAY_KEY_ID,
-  key_secret: RAZORPAY_KEY_SECRET
-});
+const API = 'https://api.razorpay.com/v1';
+
+/** Every provider call gets a hard deadline so a hung socket cannot pin an
+ *  edge-function invocation (and the user's billing claim) open. */
+const REQUEST_TIMEOUT_MS = 15_000;
+
 export function createAdmin() {
   return createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false
-    }
+    auth: { persistSession: false, autoRefreshToken: false },
   });
 }
-/** Converts Razorpay epoch-seconds to ms epoch as used across Paqt. */ export function ms(value) {
-  if (value == null) {
-    return null;
+
+export type Admin = ReturnType<typeof createAdmin>;
+
+/**
+ * A Razorpay API failure.
+ *
+ * `providerDescription` is for logs only: it is never returned to the browser,
+ * because it can carry merchant account identifiers and internal Razorpay
+ * wording that is not ours to expose.
+ */
+export class RazorpayError extends Error {
+  readonly status: number;
+  readonly code: string;
+  readonly providerDescription: string;
+  readonly retryable: boolean;
+
+  constructor(status: number, code: string, description: string) {
+    super(`Razorpay ${code} (${status})`);
+    this.name = 'RazorpayError';
+    this.status = status;
+    this.code = code;
+    this.providerDescription = description;
+    this.retryable = status === 429 || status >= 500;
   }
-  return BigInt(Math.round(value * 1000));
 }
-export function corsHeaders() {
-  return {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS'
-  };
+
+/** True when the key pair is present. Fails loudly and early rather than letting
+ *  every request come back as an opaque 401 from the provider. */
+export function razorpayConfigured(): boolean {
+  return Boolean(RAZORPAY_KEY_ID && RAZORPAY_KEY_SECRET);
 }
-export function jsonError(status, code, message) {
-  return new Response(JSON.stringify({
-    error: {
-      code,
-      message
-    }
-  }), {
-    status,
-    headers: {
-      'Content-Type': 'application/json',
-      ...corsHeaders()
-    }
-  });
+
+export function razorpayKeyId(): string {
+  return RAZORPAY_KEY_ID;
 }
-export function jsonOk(extra = {}) {
-  return new Response(JSON.stringify({
-    received: true,
-    ...extra
-  }), {
-    headers: {
-      'Content-Type': 'application/json',
-      ...corsHeaders()
-    }
-  });
-}
-/** Low-level Razorpay REST call using basic auth (SDK lacks resume/plan-switch). */ async function razorpayApi(path, init = {}) {
+
+async function call<T>(method: 'GET' | 'POST' | 'PATCH' | 'DELETE', path: string, body?: unknown): Promise<T> {
+  if (!razorpayConfigured()) {
+    throw new RazorpayError(0, 'not_configured', 'RAZORPAY_KEY_ID/RAZORPAY_KEY_SECRET missing');
+  }
   const auth = `Basic ${btoa(`${RAZORPAY_KEY_ID}:${RAZORPAY_KEY_SECRET}`)}`;
-  const response = await fetch(`https://api.razorpay.com/v1${path}`, {
-    ...init,
-    headers: {
-      Authorization: auth,
-      'Content-Type': 'application/json',
-      ...(init.headers ?? {})
-    }
-  });
-  const text = await response.text();
-  let parsed = {};
+  let response: Response;
   try {
-    parsed = text ? JSON.parse(text) : {};
-  } catch  {
-    parsed = {};
+    response = await fetch(`${API}${path}`, {
+      method,
+      headers: {
+        Authorization: auth,
+        'Content-Type': 'application/json',
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+  } catch (err) {
+    // A network timeout/abort is genuinely uncertain: the request may or may not
+    // have been applied upstream, so callers must reconcile instead of retrying
+    // blindly.
+    throw new RazorpayError(0, 'transport_error', (err as Error)?.message ?? 'network failure');
+  }
+  const text = await response.text();
+  let parsed: Record<string, unknown> = {};
+  if (text) {
+    try {
+      parsed = JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      parsed = {};
+    }
   }
   if (!response.ok) {
-    throw new Error(`Razorpay ${path} failed: ${response.status} ${text}`);
-  }
-  return parsed;
-}
-/**
- * Cancels a subscription IMMEDIATELY and verifies it actually stopped.
- *
- * Do NOT use cancel-at-cycle-end: Razorpay silently ignores it in some
- * configurations (returns 200, sub unchanged, `has_scheduled_changes` still
- * false, `charge_at` intact) — exactly the double-charge landmine seen in
- * production. Immediate cancel is reliable, and residual paid access is
- * preserved by the profile's `period_end`, so nothing is lost.
- *
- * Throws if the cancellation did not take (so callers can fail the checkout
- * rather than risk a future re-bill).
- */
-export async function razorpayCancel(subscriptionId) {
-  const cancelled = await razorpayApi(`/subscriptions/${subscriptionId}/cancel`, {
-    method: 'POST',
-    body: JSON.stringify({ cancel_at_cycle_end: false })
-  });
-  const refreshed = await razorpayApi(`/subscriptions/${subscriptionId}`);
-  const status = (refreshed as { status?: string }).status ?? '';
-  const chargeAt = (refreshed as { charge_at?: number | null }).charge_at ?? null;
-  // `status === 'cancelled'` is the authoritative signal. `charge_at` can
-  // legitimately remain populated after a cancellation in some Razorpay
-  // configurations (their own docs return it on the cancelled entity), so a
-  // pending charge there must warn, not fail — failing would turn a successful
-  // cancellation into a false 502 while billing has actually stopped.
-  if (status !== 'cancelled') {
-    throw new Error(
-      `cancel verification failed for ${subscriptionId}: status=${status ?? 'unknown'}`
+    const error = (parsed.error ?? {}) as { code?: string; description?: string };
+    throw new RazorpayError(
+      response.status,
+      error.code ?? `http_${response.status}`,
+      error.description ?? text.slice(0, 300),
     );
   }
-  if (chargeAt != null && Number(chargeAt) > Math.floor(Date.now() / 1000)) {
-    console.warn(
-      `[razorpay] sub ${subscriptionId} cancelled but retains a future charge_at=${chargeAt}; verify no charge recurs`
-    );
-  }
-  return cancelled;
+  return parsed as T;
 }
-/** Undoes a scheduled cancellation (subscription.cancel at cycle end) so the sub resumes billing. */ export async function razorpayResume(subscriptionId) {
-  return razorpayApi(`/subscriptions/${subscriptionId}/resume`, {
-    method: 'POST'
-  });
-}
-/** Clears any pending scheduled changes (e.g. a cancel at cycle end) without touching the live sub. */ export async function razorpayCancelScheduledChanges(subscriptionId) {
-  return razorpayApi(`/subscriptions/${subscriptionId}/cancel_scheduled_changes`, {
-    method: 'POST'
-  });
-}
-/** Switches the plan of a live subscription in place. */ export async function razorpayChangePlan(subscriptionId, planId) {
-  return razorpayApi(`/subscriptions/${subscriptionId}`, {
-    method: 'PATCH',
-    body: JSON.stringify({
-      plan_id: planId
-    })
-  });
-}
-/** Resolves the Paqt plan id for a Razorpay plan id (stored in plans.price_id). */ export async function planIdForPrice(admin, priceId) {
-  const { data } = await admin.from('plans').select('id').eq('price_id', priceId).maybeSingle();
-  return data?.id ?? null;
-}
-export interface SubscriptionEntity {
-  id?: string;
-  status?: string;
-  created_at?: number;
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+export interface RazorpaySubscription {
+  id: string;
+  entity?: string;
   plan_id?: string;
   customer_id?: string;
-  start_at?: number;
+  status?: string;
   current_start?: number | null;
   current_end?: number | null;
   end_at?: number | null;
+  start_at?: number | null;
   charge_at?: number | null;
+  created_at?: number;
+  total_count?: number;
+  paid_count?: number;
   has_scheduled_changes?: boolean;
+  cancel_at_cycle_end?: boolean;
+  notes?: Record<string, string> | null;
+}
+
+export interface RazorpayPayment {
+  id: string;
+  entity?: string;
+  customer_id?: string | null;
+  subscription_id?: string | null;
+  invoice_id?: string | null;
+  order_id?: string | null;
+  method?: string | null;
+  status?: string;
+  amount?: number;
+  currency?: string;
+  error_code?: string | null;
+  error_description?: string | null;
+  created_at?: number;
+  notes?: Record<string, string> | null;
+}
+
+export interface RazorpayRefund {
+  id: string;
+  payment_id?: string;
+  status?: string;
+  amount?: number;
+  notes?: Record<string, string> | null;
+}
+
+export interface RazorpayCustomer {
+  id: string;
+  name?: string;
+  email?: string;
+  notes?: Record<string, string> | null;
+}
+
+/** Paqt's normalized subscription status (mirrors the DB check constraint). */
+export type PaqtStatus =
+  | 'authenticating'
+  | 'active'
+  | 'canceling'
+  | 'past_due'
+  | 'paused'
+  | 'expired'
+  | 'canceled'
+  | 'completed'
+  | 'failed';
+
+/**
+ * Razorpay status -> Paqt status.
+ *
+ * `created` (checkout opened, nothing authorised) and `authenticated`
+ * (authorised, first charge not yet landed) grant nothing: they become
+ * `authenticating`, which the entitlement query refuses because it requires a
+ * paid period.
+ *
+ * `halted` means Razorpay gave up collecting. The period the customer already
+ * paid for is still theirs, so it maps to `past_due` rather than `canceled` —
+ * access then ends exactly at `current_period_end` instead of immediately.
+ */
+export function mapRazorpayStatus(raw: string | null | undefined): PaqtStatus {
+  switch ((raw ?? '').toLowerCase()) {
+    case 'created':
+    case 'authenticated':
+      return 'authenticating';
+    case 'active':
+    case 'pending':
+    case 'charging':
+    case 'paid':
+      return 'active';
+    case 'paused':
+      return 'paused';
+    case 'halted':
+      return 'past_due';
+    case 'cancelled':
+      return 'canceled';
+    case 'completed':
+      return 'completed';
+    case 'expired':
+      return 'expired';
+    default:
+      console.warn('[razorpay] unmapped subscription status:', raw);
+      // Conservative but not destructive: entitlement is still time-boxed to the
+      // paid period, so an unknown new status cannot lock out a paying customer.
+      return 'past_due';
+  }
+}
+
+/** Statuses that hold a row in the "one live subscription per user" index. */
+const LIVE_STATUSES = new Set<PaqtStatus>([
+  'authenticating',
+  'active',
+  'canceling',
+  'past_due',
+  'paused',
+]);
+
+export function isLiveStatus(status: string | null | undefined): boolean {
+  return LIVE_STATUSES.has((status ?? '') as PaqtStatus);
+}
+
+/** True when the subscription has actually entered a paid billing cycle. */
+export function hasStartedCycle(sub: RazorpaySubscription | null | undefined): boolean {
+  return typeof sub?.current_start === 'number' && sub.current_start > 0;
+}
+
+/** True when a future period has been paid for. */
+export function hasPaidPeriod(sub: RazorpaySubscription | null | undefined, nowMs = Date.now()): boolean {
+  return typeof sub?.current_end === 'number' && sub.current_end * 1000 > nowMs;
+}
+
+/** True when Razorpay still intends to take money from this subscription. */
+export function willChargeInFuture(sub: RazorpaySubscription | null | undefined, nowMs = Date.now()): boolean {
+  return typeof sub?.charge_at === 'number' && sub.charge_at * 1000 > nowMs;
+}
+
+export function ms(value: number | null | undefined): number | null {
+  if (value == null) {
+    return null;
+  }
+  return Math.round(value * 1000);
+}
+
+export function toMsNumber(value: unknown): number | null {
+  return typeof value === 'bigint' ? Number(value) : typeof value === 'number' ? value : null;
+}
+
+// ---------------------------------------------------------------------------
+// Subscriptions
+// ---------------------------------------------------------------------------
+
+export interface CreateSubscriptionInput {
+  planId: string;
+  customerId: string;
+  startAtSec?: number;
+  totalCount?: number;
   notes?: Record<string, string>;
 }
-/** Razorpay statuses that mean the subscription is live and billing. */
-const BILLING_SUB_STATUSES = new Set(['active', 'charging', 'paid', 'pending']);
-/** Profile statuses that already hand out paid access. */
-const LIVE_PROFILE_STATUSES = new Set(['active', 'trialing', 'canceling']);
-/** True when the subscription is live and billing on Razorpay. */
-export function isBillingSubscription(sub: SubscriptionEntity): boolean {
-  return Boolean(sub.id && sub.status && BILLING_SUB_STATUSES.has(sub.status));
+
+export async function createSubscription(input: CreateSubscriptionInput): Promise<RazorpaySubscription> {
+  return call<RazorpaySubscription>('POST', '/subscriptions', {
+    plan_id: input.planId,
+    total_count: input.totalCount ?? 12,
+    customer_id: input.customerId,
+    customer_notify: 1,
+    ...(input.startAtSec ? { start_at: input.startAtSec } : {}),
+    notes: input.notes ?? {},
+  });
 }
-/** True when the subscription has actually entered a billing cycle (money taken). */
-export function hasStartedCycle(sub: SubscriptionEntity): boolean {
-  return typeof sub.current_start === 'number' && sub.current_start > 0;
+
+export async function fetchSubscription(id: string): Promise<RazorpaySubscription> {
+  return call<RazorpaySubscription>('GET', `/subscriptions/${id}`);
 }
+
+export async function fetchPayment(id: string): Promise<RazorpayPayment> {
+  return call<RazorpayPayment>('GET', `/payments/${id}`);
+}
+
 /**
- * Lists a customer's subscriptions. Razorpay's list endpoint has no customer
- * filter, so we list recent subscriptions and filter client-side. The
- * subscription the profile currently tracks is fetched by id separately — it
- * is the authoritative anchor and must be found no matter how many older
- * (mostly cancelled) subscriptions preceded it, so a churn-heavy customer is
- * never missed by a pagination limit. Pagination uses the documented `skip`
- * cursor (the list API only accepts `skip`/`count`; `from`/`to` are Unix
- * timestamps and there is no id cursor). Returns an empty list on any failure
- * so checkout never fails over a listing hiccup.
+ * Cancels at the end of the current, already-paid cycle.
+ *
+ * Razorpay answers 200 with `cancel_at_cycle_end: true` and stops billing; the
+ * paid period is untouched, so entitlement continues until `current_end`. This
+ * is the only cancellation Paqt uses for a subscription that has charged —
+ * an immediate cancel would revoke access the customer has paid for.
+ */
+/**
+ * Schedules cancellation at the end of the paid period.
+ *
+ * This uses the update endpoint, NOT `POST /cancel`. `POST /cancel` with
+ * `cancel_at_cycle_end: true` answers 200 and silently does nothing for payment
+ * modes Razorpay will not let you update (UPI), which left customers believing a
+ * cancellation was scheduled while the next charge still went through. The update
+ * endpoint rejects the same request loudly, so the unsupported case can be handled
+ * instead of ignored.
+ *
+ * Throws {@link RazorpayError} with `deferredCancelUnsupported` set when Razorpay
+ * refuses the update for this payment mode.
+ */
+export async function cancelAtCycleEnd(id: string): Promise<RazorpaySubscription> {
+  try {
+    return await call<RazorpaySubscription>('PATCH', `/subscriptions/${id}`, {
+      cancel_at_cycle_end: true,
+    });
+  } catch (err) {
+    if (err instanceof RazorpayError && isDeferredCancelRefusal(err.providerDescription)) {
+      throw new DeferredCancelUnsupportedError(err.providerDescription, err);
+    }
+    throw err;
+  }
+}
+
+const DEFERRED_CANCEL_REFUSAL = /cannot be updated when payment mode/i;
+
+function isDeferredCancelRefusal(description: string | undefined): boolean {
+  return typeof description === 'string' && DEFERRED_CANCEL_REFUSAL.test(description);
+}
+
+/**
+ * Razorpay will not schedule a cycle-end cancellation for some payment modes
+ * (UPI). The renewal cannot be prevented from taking effect inside Razorpay, so
+ * the only way to stop future charges is to cancel immediately.
+ */
+export class DeferredCancelUnsupportedError extends Error {
+  readonly reason: string;
+
+  constructor(reason: string, options?: { cause?: unknown }) {
+    super(reason);
+    this.name = 'DeferredCancelUnsupportedError';
+    this.reason = reason;
+    if (options?.cause) {
+      (this as { cause?: unknown }).cause = options.cause;
+    }
+  }
+}
+
+/**
+ * Cancels immediately. Only correct for a subscription that never charged
+ * (checkout abandoned, or a refund revoking a plan), where there is no paid
+ * period left to protect.
+ */
+export async function cancelNow(id: string): Promise<RazorpaySubscription> {
+  return call<RazorpaySubscription>('POST', `/subscriptions/${id}/cancel`, {
+    cancel_at_cycle_end: false,
+  });
+}
+
+/** Undoes a scheduled cancellation so the subscription keeps billing. */
+export async function resume(id: string): Promise<RazorpaySubscription> {
+  return call<RazorpaySubscription>('POST', `/subscriptions/${id}/resume`);
+}
+
+/** Clears a scheduled plan change / scheduled cancellation. */
+export async function cancelScheduledChanges(id: string): Promise<RazorpaySubscription> {
+  return call<RazorpaySubscription>('POST', `/subscriptions/${id}/cancel_scheduled_changes`);
+}
+
+/**
+ * Switches the plan of a live subscription at the next cycle boundary.
+ *
+ * Razorpay only accepts this while the subscription is `authenticated` or
+ * `active`; otherwise it is rejected and the caller falls back to creating a
+ * replacement subscription. `schedule_change_at: 'cycle_end'` is what makes this
+ * a *change* rather than an immediate re-billing on the new price.
+ */
+export async function schedulePlanChange(id: string, razorpayPlanId: string): Promise<RazorpaySubscription> {
+  return call<RazorpaySubscription>('PATCH', `/subscriptions/${id}`, {
+    plan_id: razorpayPlanId,
+    schedule_change_at: 'cycle_end',
+  });
+}
+
+/**
+ * Lists a customer's subscriptions, newest first.
+ *
+ * The list endpoint has no customer filter, so results are filtered locally.
+ * `trackedId` is fetched directly first: it is the authoritative anchor and must
+ * be found regardless of pagination. Returns [] on failure so a listing hiccup
+ * degrades to "cannot confirm" instead of a hard error.
  */
 export async function listSubscriptions(
   customerId: string,
   trackedId?: string | null,
-): Promise<SubscriptionEntity[]> {
+): Promise<RazorpaySubscription[]> {
   try {
-    const seen = new Map<string, SubscriptionEntity>();
-    const add = (sub?: SubscriptionEntity | null): void => {
-      if (sub && sub.id && sub.customer_id === customerId) {
+    const seen = new Map<string, RazorpaySubscription>();
+    const add = (sub?: RazorpaySubscription | null): void => {
+      if (sub?.id && sub.customer_id === customerId) {
         seen.set(sub.id, sub);
       }
     };
-
     if (trackedId) {
       try {
-        add(await razorpay.subscriptions.fetch(trackedId));
+        add(await fetchSubscription(trackedId));
       } catch {
-        // The tracked sub may no longer exist on Razorpay (e.g. an interrupted
-        // upgrade left a stale id); the list below still covers it if present.
+        // The tracked id may no longer exist upstream; the list below still
+        // covers it when present.
       }
     }
-
     for (let skip = 0; skip < 500; skip += 100) {
-      const page = await razorpay.subscriptions.all({ count: 100, skip });
-      const pageItems = (page.items as SubscriptionEntity[]) ?? [];
-      for (const sub of pageItems) add(sub);
-      if (pageItems.length < 100) break;
+      const page = await call<{ items?: RazorpaySubscription[] }>('GET', `/subscriptions?count=100&skip=${skip}`);
+      const items = page.items ?? [];
+      for (const sub of items) {
+        add(sub);
+      }
+      if (items.length < 100) {
+        break;
+      }
     }
-
-    return Array.from(seen.values());
+    return [...seen.values()];
   } catch (err) {
-    const detail = (err as Error)?.message ?? 'unknown error';
-    console.error('[razorpay] could not list subscriptions:', detail);
+    console.error('[razorpay] listSubscriptions failed:', (err as Error)?.message);
     return [];
   }
 }
+
 /**
- * Picks the subscription a customer has actually paid for: live, already into
- * a billing cycle, and paid through to a future boundary. The most recent
- * cycle wins (that is the one they last paid for); ties break on the
- * furthest-paid boundary.
+ * Picks the subscription a customer has actually paid for: live upstream, in a
+ * cycle, paid through to a future boundary. The most recent cycle wins.
  */
-export function pickPaidSubscription(items: SubscriptionEntity[]): SubscriptionEntity | null {
-  const nowSec = Math.floor(Date.now() / 1000);
+export function pickPaidSubscription(
+  items: RazorpaySubscription[],
+  nowMs = Date.now(),
+): RazorpaySubscription | null {
   const paid = items.filter(
     (sub) =>
-      isBillingSubscription(sub) &&
+      isLiveStatus(mapRazorpayStatus(sub.status)) &&
       hasStartedCycle(sub) &&
-      typeof sub.current_end === 'number' &&
-      sub.current_end > nowSec,
+      hasPaidPeriod(sub, nowMs),
   );
   if (paid.length === 0) {
     return null;
@@ -233,208 +433,114 @@ export function pickPaidSubscription(items: SubscriptionEntity[]): SubscriptionE
     return (sub.current_end ?? 0) > (best.current_end ?? 0) ? sub : best;
   });
 }
-function toMsNumber(value: unknown): number | null {
-  if (typeof value === 'bigint') {
-    return Number(value);
-  }
-  if (typeof value === 'number') {
-    return value;
-  }
-  return null;
+
+/** Finds a subscription created by a specific billing operation (timeout recovery). */
+export function findByOperation(items: RazorpaySubscription[], operationId: string): RazorpaySubscription | null {
+  return items.find((sub) => (sub.notes ?? {})?.op_id === operationId) ?? null;
 }
-export interface ProfileSnapshot {
-  plan_id: string | null;
-  subscription_status: string;
-  subscription_id: string | null;
-  period_start: number | null;
-  period_end: number | null;
+
+// ---------------------------------------------------------------------------
+// Customers
+// ---------------------------------------------------------------------------
+
+export async function fetchCustomer(id: string): Promise<RazorpayCustomer> {
+  return call<RazorpayCustomer>('GET', `/customers/${id}`);
 }
-export interface ReconcileResult {
-  /** True when the profile was rewritten from the live Razorpay subscription. */
-  repaired: boolean;
-  reason:
-    | 'in_sync'
-    | 'canceling'
-    | 'no_customer'
-    | 'no_paid_subscription'
-    | 'unmapped_plan'
-    | 'no_paid_period'
-    | 'db_write_failed'
-    | 'repaired_from_razorpay';
-  profile: ProfileSnapshot | null;
+
+export async function createCustomer(input: {
+  name?: string;
+  email?: string;
+  notes?: Record<string, string>;
+}): Promise<RazorpayCustomer> {
+  // fail_existing makes a re-registered user (whose auth row was cascade-deleted
+  // but whose Razorpay customer survived) adopt the existing customer instead of
+  // erroring.
+  return call<RazorpayCustomer>('POST', '/customers', {
+    name: input.name,
+    email: input.email,
+    notes: input.notes ?? {},
+    fail_existing: '0',
+  });
 }
+
 /**
- * Repairs a `profiles` row that has drifted from Razorpay.
+ * Resolves the Razorpay customer for a Paqt user, creating one if needed.
  *
- * The profile mirror is written ONLY by the subscription.activated/charged
- * webhook. If that webhook is unregistered, its signature check fails, or the
- * plan→price mapping is missing, a customer who has genuinely paid is left
- * with `subscription_status = 'none'`, `plan_id = null` and no billing period
- * — i.e. a live, billed subscription that grants no access. Nothing in the
- * system noticed, because every read path trusted the profile.
- *
- * This walks Razorpay and rebuilds the mirror from the authoritative record, so
- * a missed webhook heals on the next checkout or billing-page read instead of
- * stranding the customer. It is deliberately conservative: it only ever
- * *grants* access that Razorpay proves was paid for, and it never resurrects a
- * subscription the customer cancelled (the `canceling` state is an explicit
- * decision that only the webhook may undo).
+ * The stored id is validated first: if the API keys were rotated between test and
+ * live mode, a stale id is rejected by Razorpay and every later checkout would
+ * fail with a confusing provider error.
  */
-export async function reconcileProfileFromRazorpay(
-  admin: ReturnType<typeof createAdmin>,
-  options: { userId: string; customerId: string | null },
-): Promise<ReconcileResult> {
-  const { userId, customerId } = options;
+export async function getOrCreateCustomer(
+  admin: Admin,
+  userId: string,
+  email: string,
+  name: string,
+): Promise<string> {
   const { data } = await admin
     .from('profiles')
-    .select('plan_id, subscription_status, subscription_id, payment_customer_id, period_start, period_end')
+    .select('payment_customer_id')
     .eq('user_id', userId)
     .maybeSingle();
-  const row = (data ?? null) as Record<string, unknown> | null;
-
-  const snapshot = (): ProfileSnapshot => ({
-    plan_id: (row?.plan_id as string | null) ?? null,
-    subscription_status: (row?.subscription_status as string) ?? 'none',
-    subscription_id: (row?.subscription_id as string | null) ?? null,
-    period_start: toMsNumber(row?.period_start),
-    period_end: toMsNumber(row?.period_end),
+  const existing = data?.payment_customer_id as string | null | undefined;
+  if (existing) {
+    try {
+      await fetchCustomer(existing);
+      return existing;
+    } catch {
+      await admin
+        .from('profiles')
+        .update({ payment_customer_id: null, updated_at: Date.now() })
+        .eq('user_id', userId);
+    }
+  }
+  const customer = await createCustomer({
+    name: name || email.split('@')[0] || 'Paqt user',
+    email: email || undefined,
+    notes: { user_id: userId },
   });
-
-  const status = (row?.subscription_status as string) ?? 'none';
-  const periodEnd = toMsNumber(row?.period_end);
-
-  // Cancelled-at-cycle-end is an explicit decision (the customer or a webhook
-  // asked for it). Reconciling must never flip it back to `active`; only a real
-  // renewal event may.
-  if (status === 'canceling') {
-    return { repaired: false, reason: 'canceling', profile: snapshot() };
-  }
-
-  // Already granting access through a paid period — nothing to repair.
-  if (row?.plan_id && LIVE_PROFILE_STATUSES.has(status) && periodEnd != null && periodEnd > Date.now()) {
-    return { repaired: false, reason: 'in_sync', profile: snapshot() };
-  }
-
-  if (!customerId) {
-    return { repaired: false, reason: 'no_customer', profile: snapshot() };
-  }
-
-  const candidate = pickPaidSubscription(
-    await listSubscriptions(customerId, (row?.subscription_id as string | null) ?? null),
-  );
-  if (!candidate?.id) {
-    return { repaired: false, reason: 'no_paid_subscription', profile: snapshot() };
-  }
-
-  const planId = await planIdForPrice(admin, candidate.plan_id ?? '');
-  if (!planId) {
-    console.error(
-      `[razorpay] cannot reconcile ${candidate.id}: razorpay plan ${candidate.plan_id} has no Paqt plan mapping`,
-    );
-    return { repaired: false, reason: 'unmapped_plan', profile: snapshot() };
-  }
-
-  const period = periodFromSubscription(candidate);
-  const periodStart = toMsNumber(period.start);
-  const periodEndMs = toMsNumber(period.end);
-  if (periodStart == null || periodEndMs == null || periodEndMs <= Date.now()) {
-    return { repaired: false, reason: 'no_paid_period', profile: snapshot() };
-  }
-
   const { error } = await admin.from('profiles').upsert(
-    {
-      user_id: userId,
-      plan_id: planId,
-      subscription_status: 'active',
-      subscription_id: candidate.id,
-      payment_customer_id: customerId,
-      period_start: periodStart,
-      period_end: periodEndMs,
-      updated_at: Date.now(),
-    },
+    { user_id: userId, payment_customer_id: customer.id, updated_at: Date.now() },
     { onConflict: 'user_id' },
   );
   if (error) {
-    console.error('[razorpay] could not repair drifted profile:', error.message);
-    return { repaired: false, reason: 'db_write_failed', profile: snapshot() };
+    // The customer exists upstream; a missing local link only means the next
+    // read has to look it up again, so this is not fatal for the checkout.
+    console.error('[razorpay] could not link customer to profile:', error.message);
   }
-
-  return {
-    repaired: true,
-    reason: 'repaired_from_razorpay',
-    profile: {
-      plan_id: planId,
-      subscription_status: 'active',
-      subscription_id: candidate.id,
-      period_start: periodStart,
-      period_end: periodEndMs,
-    },
-  };
-}
-/** Reads the current billing period from a Razorpay subscription entity. */ export function periodFromSubscription(subscription) {
-  return {
-    start: ms(subscription.current_start ?? null),
-    end: ms(subscription.current_end ?? null)
-  };
-}
-export async function getOrCreateCustomer(admin, userId, email, name) {
-  const { data: profileRows } = await admin.from('profiles').select('payment_customer_id').eq('user_id', userId).maybeSingle();
-  const existing = profileRows?.payment_customer_id;
-  if (existing) {
-    // The stored customer may come from a different mode (test vs live) if the
-    // API keys were rotated; Razorpay rejects unknown ids during checkout, so
-    // validate it and fall through to creating a fresh customer if it is gone.
-    try {
-      await razorpay.customers.fetch(existing);
-      return existing;
-    } catch  {
-      await admin.from('profiles').update({
-        payment_customer_id: null,
-        updated_at: Date.now()
-      }).eq('user_id', userId);
-    }
-  }
-  // If a customer with the same email already exists on the merchant (for
-  // example when the user deleted their Paqt account and re-registered, which
-  // cascade-deletes the profile row but not the Razorpay customer), a plain
-  // create fails with "Customer already exists for the merchant". With
-  // fail_existing: '0' Razorpay returns that existing customer instead.
-  const customer = await razorpay.customers.create({
-    name: name || email.split('@')[0] || 'Paqt user',
-    email: email || undefined,
-    notes: {
-      user_id: userId
-    },
-    fail_existing: '0'
-  });
-  await admin.from('profiles').upsert({
-    user_id: userId,
-    payment_customer_id: customer.id,
-    updated_at: Date.now()
-  }, {
-    onConflict: 'user_id'
-  });
   return customer.id;
 }
-/** Verifies the Razorpay webhook signature (HMAC-SHA256 over the raw body). */ export async function verifyWebhookSignature(rawBody, signature, secret) {
+
+// ---------------------------------------------------------------------------
+// Webhook signature
+// ---------------------------------------------------------------------------
+
+/** Constant-time HMAC-SHA256 comparison over the raw request body. */
+export async function verifyWebhookSignature(
+  rawBody: string,
+  signature: string | null,
+  secret: string,
+): Promise<boolean> {
   if (!signature || !secret) {
     return false;
   }
   const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey('raw', encoder.encode(secret), {
-    name: 'HMAC',
-    hash: 'SHA-256'
-  }, false, [
-    'sign'
-  ]);
+  const key = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
   const digest = await crypto.subtle.sign('HMAC', key, encoder.encode(rawBody));
-  const expected = Array.from(new Uint8Array(digest)).map((byte)=>byte.toString(16).padStart(2, '0')).join('');
-  const provided = signature.toLowerCase();
+  const expected = Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+  const provided = signature.trim().toLowerCase();
   if (expected.length !== provided.length) {
     return false;
   }
   let mismatch = 0;
-  for(let i = 0; i < expected.length; i += 1){
+  for (let i = 0; i < expected.length; i += 1) {
     mismatch |= expected.charCodeAt(i) ^ provided.charCodeAt(i);
   }
   return mismatch === 0;

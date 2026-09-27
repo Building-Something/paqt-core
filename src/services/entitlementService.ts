@@ -9,11 +9,24 @@ export interface MeterInfo {
 
 export interface UsageSnapshot {
   signedIn: boolean;
+  /** Entitlement gate: does the account currently have paid access? */
   status: string;
+  /**
+   * Operational state from the authoritative subscription record. It is separate
+   * from `status` on purpose: "you have access" and "what is happening to your
+   * billing" are different questions (e.g. a cancelling subscription is both
+   * entitled and on its way out).
+   */
+  billingStatus: string | null;
   planId: string | null;
   planName: string | null;
   periodStart: number | null;
   periodEnd: number | null;
+  cancelAtPeriodEnd: boolean;
+  pendingPlanId: string | null;
+  pendingPlanName: string | null;
+  pendingChangeAt: number | null;
+  pendingChangeKind: 'upgrade' | 'downgrade' | 'switch' | null;
   analysis: MeterInfo;
   draft: MeterInfo;
   credits: number | null;
@@ -22,10 +35,16 @@ export interface UsageSnapshot {
 export const NO_USAGE: UsageSnapshot = {
   signedIn: false,
   status: 'none',
+  billingStatus: null,
   planId: null,
   planName: null,
   periodStart: null,
   periodEnd: null,
+  cancelAtPeriodEnd: false,
+  pendingPlanId: null,
+  pendingPlanName: null,
+  pendingChangeAt: null,
+  pendingChangeKind: null,
   analysis: { used: 0, quota: 0, remaining: 0 },
   draft: { used: 0, quota: 0, remaining: 0 },
   credits: null,
@@ -34,6 +53,24 @@ export const NO_USAGE: UsageSnapshot = {
 function toFiniteNumber(value: unknown, fallback: number | null): number | null {
   const number = typeof value === 'bigint' ? Number(value) : Number(value);
   return Number.isFinite(number) ? number : fallback;
+}
+
+function toMs(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'bigint') {
+    return Number(value);
+  }
+  return null;
+}
+
+function toStringOrNull(value: unknown): string | null {
+  return typeof value === 'string' && value ? value : null;
+}
+
+function normalizeChangeKind(value: unknown): UsageSnapshot['pendingChangeKind'] {
+  return value === 'upgrade' || value === 'downgrade' || value === 'switch' ? value : null;
 }
 
 function normalizeMeter(raw: unknown): MeterInfo {
@@ -56,20 +93,34 @@ export function normalizeUsage(raw: unknown): UsageSnapshot {
   return {
     signedIn,
     status: typeof value.status === 'string' ? value.status : 'none',
-    planId: typeof value.plan_id === 'string' ? value.plan_id : null,
-    planName: typeof value.plan_name === 'string' ? value.plan_name : null,
-    periodStart:
-      typeof value.period_start === 'number' || typeof value.period_start === 'bigint'
-        ? Number(value.period_start)
-        : null,
-    periodEnd:
-      typeof value.period_end === 'number' || typeof value.period_end === 'bigint'
-        ? Number(value.period_end)
-        : null,
+    billingStatus: toStringOrNull(value.billing_status),
+    planId: toStringOrNull(value.plan_id),
+    planName: toStringOrNull(value.plan_name),
+    periodStart: toMs(value.period_start),
+    periodEnd: toMs(value.period_end),
+    cancelAtPeriodEnd: value.cancel_at_period_end === true,
+    pendingPlanId: toStringOrNull(value.pending_plan_id),
+    pendingPlanName: toStringOrNull(value.pending_plan_name),
+    pendingChangeAt: toMs(value.pending_change_at),
+    pendingChangeKind: normalizeChangeKind(value.pending_change_kind),
     analysis: normalizeMeter(value.analysis),
     draft: normalizeMeter(value.draft),
     credits: value.credits === null || value.credits === undefined ? null : Number(value.credits),
   };
+}
+
+/** Describes a plan change Razorpay will apply at the next cycle boundary. */
+export function pendingChangeMessage(usage: UsageSnapshot): string | null {
+  if (!usage.pendingPlanId) {
+    return null;
+  }
+  const name = usage.pendingPlanName ?? PLANS.find((plan) => plan.id === usage.pendingPlanId)?.name ?? 'another plan';
+  const verb =
+    usage.pendingChangeKind === 'downgrade' ? 'switches' : usage.pendingChangeKind === 'upgrade' ? 'upgrades' : 'changes';
+  const when = usage.pendingChangeAt
+    ? ` on ${new Date(usage.pendingChangeAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`
+    : ' at the end of this period';
+  return `Your plan ${verb} to ${name}${when}. You keep ${usage.planName ?? 'your current plan'} until then.`;
 }
 
 /** True when the account holds an active (billed) subscription. */
@@ -159,19 +210,44 @@ export interface RazorpayCheckout {
   reconciled?: boolean;
   planId?: string | null;
   periodEnd?: number | null;
+  /** True when the plan change is scheduled for the next cycle, not applied now. */
+  scheduled?: boolean;
+  scheduledChangeAt?: number | null;
+  /** True when this subscription was created by an earlier, timed-out attempt. */
+  adopted?: boolean;
+  startsAt?: number | null;
 }
 
-export type CheckoutOutcome = 'completed' | 'dismissed' | 'reconciled';
+export type CheckoutOutcome = 'completed' | 'dismissed' | 'reconciled' | 'scheduled';
 
 export interface SubscriptionInfo {
   hasSubscription: boolean;
   status: string;
+  billingStatus: string | null;
   planId: string | null;
+  planName: string | null;
   periodStart: number | null;
   periodEnd: number | null;
   subscriptionId: string | null;
   cancelsAtPeriodEnd?: boolean;
-  /** True when this read rebuilt the profile mirror from Razorpay. */
+  /**
+   * True when the cancellation was applied right now instead of being scheduled
+   * for the end of a paid period. Either Razorpay had no billing cycle to defer
+   * to (the subscription was never charged), or it refused to schedule one for
+   * this payment mode and Paqt stopped it at the provider instead.
+   */
+  canceledImmediately?: boolean;
+  /**
+   * True when Razorpay refused to schedule the cycle-end cancellation and Paqt
+   * cancelled at the provider while keeping access until `periodEnd`. The
+   * renewal is stopped, but Razorpay is not the thing holding the schedule.
+   */
+  providerCancelledImmediately?: boolean;
+  pendingPlanId: string | null;
+  pendingPlanName: string | null;
+  pendingChangeAt: number | null;
+  pendingChangeKind: 'upgrade' | 'downgrade' | 'switch' | null;
+  /** True when this read rebuilt the billing state from Razorpay. */
   reconciled?: boolean;
 }
 
@@ -228,12 +304,35 @@ async function callBillingEdge(name: string, body?: unknown): Promise<Record<str
  * opens so the customer can use a different card/UPI) instead of renewing the
  * existing subscription in place.
  */
+let pendingCheckoutKey: string | null = null;
+
+/**
+ * One idempotency key per checkout *attempt*.
+ *
+ * It is generated lazily and reused by retries, so a network failure followed by
+ * another click replays the stored result instead of starting a second billing
+ * operation. It is cleared once the attempt reaches a terminal state, so the next
+ * purchase is a genuinely new operation.
+ */
+function checkoutIdempotencyKey(): string {
+  pendingCheckoutKey ??=
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `op_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  return pendingCheckoutKey;
+}
+
+export function resetCheckoutIdempotencyKey(): void {
+  pendingCheckoutKey = null;
+}
+
 export async function beginCheckout(
   planId: string,
   options: { paymentMethod?: 'same' | 'new' } = {},
 ): Promise<RazorpayCheckout> {
   const body = await callBillingEdge('create-checkout-session', {
     plan_id: planId,
+    idempotency_key: checkoutIdempotencyKey(),
     ...(options.paymentMethod === 'new' ? { payment_method: 'new' } : {}),
   });
   if (body.switched === true) {
@@ -246,6 +345,8 @@ export async function beginCheckout(
       reconciled: body.reconciled === true,
       planId: typeof body.plan_id === 'string' ? body.plan_id : null,
       periodEnd: typeof body.period_end === 'number' ? body.period_end : null,
+      scheduled: body.scheduled === true,
+      scheduledChangeAt: typeof body.scheduled_change_at === 'number' ? body.scheduled_change_at : null,
     };
   }
   if (typeof body.key_id !== 'string' || typeof body.subscription_id !== 'string') {
@@ -259,6 +360,8 @@ export async function beginCheckout(
     subscriptionId: body.subscription_id,
     name: typeof body.name === 'string' ? body.name : null,
     email: typeof body.email === 'string' ? body.email : null,
+    adopted: body.adopted === true,
+    startsAt: typeof body.starts_at === 'number' ? body.starts_at : null,
   };
 }
 
@@ -303,7 +406,13 @@ export async function openRazorpayCheckout(
   checkout: RazorpayCheckout,
 ): Promise<CheckoutOutcome> {
   if (checkout.switched) {
-    return checkout.reconciled ? 'reconciled' : 'completed';
+    // Nothing was collected: either the plan change is scheduled for the next
+    // cycle, or the account was re-synced to a subscription that was already paid.
+    resetCheckoutIdempotencyKey();
+    if (checkout.reconciled) {
+      return 'reconciled';
+    }
+    return checkout.scheduled ? 'scheduled' : 'completed';
   }
   await loadRazorpayScript();
   const Checkout = window.Razorpay;
@@ -323,8 +432,18 @@ export async function openRazorpayCheckout(
         name: checkout.name ?? undefined,
         email: checkout.email ?? undefined,
       },
-      handler: () => resolve('completed'),
-      modal: { ondismiss: () => resolve('dismissed') },
+      handler: () => {
+        resetCheckoutIdempotencyKey();
+        resolve('completed');
+      },
+      modal: {
+        ondismiss: () => {
+          // A dismissed modal collected no money and the subscription is
+          // untouched, so the next click starts a fresh operation.
+          resetCheckoutIdempotencyKey();
+          resolve('dismissed');
+        },
+      },
     });
     instance.open();
   });
@@ -334,11 +453,19 @@ function normalizeSubscriptionInfo(body: Record<string, unknown>): SubscriptionI
   return {
     hasSubscription: body.has_subscription === true,
     status: typeof body.status === 'string' ? body.status : 'none',
-    planId: typeof body.plan_id === 'string' ? body.plan_id : null,
-    periodStart: typeof body.period_start === 'number' ? body.period_start : null,
-    periodEnd: typeof body.period_end === 'number' ? body.period_end : null,
-    subscriptionId: typeof body.subscription_id === 'string' ? body.subscription_id : null,
+    billingStatus: toStringOrNull(body.billing_status),
+    planId: toStringOrNull(body.plan_id),
+    planName: toStringOrNull(body.plan_name),
+    periodStart: toMs(body.period_start),
+    periodEnd: toMs(body.period_end),
+    subscriptionId: toStringOrNull(body.subscription_id),
     cancelsAtPeriodEnd: body.cancels_at_period_end === true,
+    canceledImmediately: body.canceled_immediately === true,
+    providerCancelledImmediately: body.provider_cancelled_immediately === true,
+    pendingPlanId: toStringOrNull(body.pending_plan_id),
+    pendingPlanName: toStringOrNull(body.pending_plan_name),
+    pendingChangeAt: toMs(body.pending_change_at),
+    pendingChangeKind: normalizeChangeKind(body.pending_change_kind),
     reconciled: body.reconciled === true,
   };
 }
@@ -356,10 +483,19 @@ export async function manageSubscription(): Promise<SubscriptionInfo> {
   );
 }
 
-/** Schedules cancellation at the end of the current billing period. */
+/** Schedules cancellation at the end of the current, already-paid period. */
 export async function cancelSubscription(): Promise<SubscriptionInfo> {
-  return normalizeSubscriptionInfo(
+  const info = normalizeSubscriptionInfo(
     await callBillingEdge('subscription-manage', { action: 'cancel' }),
+  );
+  resetCheckoutIdempotencyKey();
+  return info;
+}
+
+/** Undoes a scheduled cancellation (and a pause) so billing continues. */
+export async function resumeSubscription(): Promise<SubscriptionInfo> {
+  return normalizeSubscriptionInfo(
+    await callBillingEdge('subscription-manage', { action: 'resume' }),
   );
 }
 
@@ -368,6 +504,33 @@ export async function cancelSubscription(): Promise<SubscriptionInfo> {
  * subscription the customer had already paid for, rebuilt it from Razorpay, and
  * deliberately did NOT take a second payment.
  */
+/**
+ * Describes the result of a cancellation.
+ *
+ * The three cases are genuinely different and the wording has to match what
+ * actually happened:
+ * - scheduled: Razorpay holds the cancellation and access runs to the period end.
+ * - provider-forced: Razorpay refused to schedule it, so Paqt stopped it at the
+ *   provider and is holding the paid period itself. Calling this "scheduled" would
+ *   claim Razorpay agreed to something it rejected; calling it "canceled" without
+ *   the end date would hide that access still runs.
+ * - immediate: nothing had been paid, so there is no period left to promise.
+ */
+export function cancelMessage(info: SubscriptionInfo): string {
+  const until = info.periodEnd
+    ? ` until ${new Date(info.periodEnd).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`
+    : '';
+  if (info.providerCancelledImmediately) {
+    return `Canceled — you will not be charged again, and your plan stays active${until || ' for the period you paid for'}.`;
+  }
+  if (info.canceledImmediately) {
+    return 'Subscription canceled. You will not be charged again.';
+  }
+  return info.periodEnd
+    ? `Cancellation scheduled — your plan stays active${until}.`
+    : 'Cancellation scheduled — your plan stays active until the end of this month.';
+}
+
 export function reconciledMessage(checkout: RazorpayCheckout): string {
   const plan = PLANS.find((entry) => entry.id === checkout.planId);
   const name = plan?.name ?? 'subscription';
@@ -375,6 +538,19 @@ export function reconciledMessage(checkout: RazorpayCheckout): string {
     ? ` Your ${name} plan is active and renews on ${new Date(checkout.periodEnd).toLocaleDateString()}.`
     : ` Your ${name} plan is now active.`;
   return `We already had your ${name} payment on file, so nothing was charged again.${renewedOn}`;
+}
+
+/**
+ * Copy for a plan change Razorpay applies at the next cycle boundary. No money
+ * moved now — the customer keeps what they paid for until the change lands, so
+ * the message must not read like a completed upgrade.
+ */
+export function scheduledChangeMessage(checkout: RazorpayCheckout): string {
+  const to = PLANS.find((entry) => entry.id === checkout.planId)?.name ?? 'your new plan';
+  const on = checkout.scheduledChangeAt
+    ? ` on ${new Date(checkout.scheduledChangeAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`
+    : ' at the end of this billing period';
+  return `Plan change to ${to} is scheduled${on}. Nothing is charged until then, and you keep your current plan until it applies.`;
 }
 
 export const PLANS = [  {

@@ -17,6 +17,7 @@ import {
   PLANS,
   BUSINESS_PLAN,
   reconciledMessage,
+  scheduledChangeMessage,
   type CheckoutError,
 } from '../services/entitlementService';
 import { Button } from './ui/button';
@@ -105,6 +106,14 @@ export function UpgradeDialog({
         await refresh();
         return;
       }
+      if (outcome === 'scheduled') {
+        // A cycle-end plan change collects nothing now, so the dialog closes and
+        // the user keeps the plan they already paid for.
+        toast('success', scheduledChangeMessage(checkout));
+        onClose();
+        await refresh();
+        return;
+      }
       if (outcome === 'completed') {
         window.location.assign('/settings?checkout=success');
       }
@@ -126,6 +135,10 @@ export function UpgradeDialog({
         toast('info', `Your ${planName} plan was cancelled. You have access until ${new Date(
           info.periodEnd ?? Date.now(),
         ).toLocaleDateString()}.`);
+      } else if (info.status === 'canceled') {
+        // Fully stopped (Razorpay had no paid cycle to defer to): no access
+        // remains and nothing further will be charged.
+        toast('info', `Your ${planName} subscription is cancelled. You will not be charged again.`);
       } else if (info.periodEnd) {
         const date = new Date(info.periodEnd).toLocaleDateString();
         toast('info', `You're on ${planName}. Your plan renews on ${date}. Manage or cancel from Plan & billing in Settings.`);

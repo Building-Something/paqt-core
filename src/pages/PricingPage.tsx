@@ -7,7 +7,7 @@ import { Button } from '../components/ui/button';
 import { Card } from '../components/ui/card';
 import { useAuth } from '../contexts/AuthContext';
 import { useEntitlement } from '../contexts/EntitlementContext';
-import { beginCheckout, manageSubscription, openRazorpayCheckout, reconciledMessage, PLANS, BUSINESS_PLAN, type CheckoutError } from '../services/entitlementService';
+import { beginCheckout, manageSubscription, openRazorpayCheckout, reconciledMessage, scheduledChangeMessage, PLANS, BUSINESS_PLAN, type CheckoutError } from '../services/entitlementService';
 import { useToast } from '../contexts/ToastContext';
 
 const EVERYTHING_INCLUDED = [
@@ -72,6 +72,11 @@ export function PricingPage() {
         await refresh();
         return;
       }
+      if (outcome === 'scheduled') {
+        toast('success', scheduledChangeMessage(checkout));
+        await refresh();
+        return;
+      }
       if (outcome === 'completed') {
         window.location.assign('/settings?checkout=success');
       }
@@ -93,6 +98,10 @@ export function PricingPage() {
         toast('info', `Your ${planName} plan was cancelled. You have access until ${new Date(
           info.periodEnd ?? Date.now(),
         ).toLocaleDateString()}.`);
+      } else if (info.status === 'canceled') {
+        // Fully stopped (Razorpay had no paid cycle to defer to): no access
+        // remains and nothing further will be charged.
+        toast('info', `Your ${planName} subscription is cancelled. You will not be charged again.`);
       } else if (info.periodEnd) {
         const date = new Date(info.periodEnd).toLocaleDateString();
         toast('info', `You're on ${planName}. Your plan renews on ${date}. Manage or cancel from Plan & billing in Settings.`);

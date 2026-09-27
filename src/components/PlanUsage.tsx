@@ -9,10 +9,14 @@ import {
   cancelSubscription,
   manageSubscription,
   openRazorpayCheckout,
+  pendingChangeMessage,
   reconciledMessage,
+  scheduledChangeMessage,
+  resumeSubscription,
   PLANS,
   canRun,
   isPlanActive,
+  cancelMessage,
   isPlanCanceling,
   type CheckoutError,
 } from '../services/entitlementService';
@@ -175,6 +179,18 @@ export function PlanUsageCard({ compact = false }: { compact?: boolean }) {
 
   const active = isPlanActive(usage);
   const canceling = isPlanCanceling(usage);
+  // Set when Razorpay refused to schedule the cycle-end cancel and Paqt stopped it
+  // at the provider instead. Resuming is then impossible, so the UI must not offer
+  // "Keep my plan". Held in component state on purpose: a durable flag would need
+  // the provider status in the profile mirror, and the resume call already
+  // explains the situation truthfully if this is lost on reload.
+  const [providerEnded, setProviderEnded] = useState(false);
+  useEffect(() => {
+    if (!canceling) {
+      setProviderEnded(false);
+    }
+  }, [canceling]);
+  const pendingChange = pendingChangeMessage(usage);
 
   // Keep a render-free handle on the freshest usage so the post-payment poller
   // below can read it without re-subscribing on every refresh.
@@ -260,6 +276,13 @@ export function PlanUsageCard({ compact = false }: { compact?: boolean }) {
         await refresh();
         return;
       }
+      if (outcome === 'scheduled') {
+        // The plan change lands at the next cycle boundary: the current, already
+        // paid period keeps the current plan, so there is nothing to wait for.
+        toast('success', scheduledChangeMessage(checkout));
+        await refresh();
+        return;
+      }
       if (outcome === 'completed') {
         window.location.assign('/settings?checkout=success');
       }
@@ -277,16 +300,27 @@ export function PlanUsageCard({ compact = false }: { compact?: boolean }) {
     try {
       const info = await cancelSubscription();
       setConfirmCancelOpen(false);
-      toast(
-        'info',
-        info.periodEnd
-          ? `Cancellation scheduled — your plan stays active until ${new Date(info.periodEnd).toLocaleDateString()}.`
-          : 'Cancellation scheduled — your plan stays active until the end of this month.',
-      );
+      setProviderEnded(info.providerCancelledImmediately === true);
+      toast('info', cancelMessage(info));
       void refresh();
     } catch (caught) {
       const message =
         (caught as CheckoutError)?.message ?? 'Could not cancel the subscription. Try again in a moment.';
+      toast('error', message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleResume() {
+    setBusy('resume');
+    try {
+      await resumeSubscription();
+      toast('success', 'Your subscription will keep renewing.');
+      void refresh();
+    } catch (caught) {
+      const message =
+        (caught as CheckoutError)?.message ?? 'Could not resume the subscription. Try again in a moment.';
       toast('error', message);
     } finally {
       setBusy(null);
@@ -302,7 +336,7 @@ export function PlanUsageCard({ compact = false }: { compact?: boolean }) {
         <div>
           <h2 className="text-sm font-semibold text-foreground">Plan &amp; billing</h2>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            {canceling
+            {canceling && !providerEnded
               ? `${usage.planName ?? 'Your plan'} cancelled · stays active until ${new Date(
                   usage.periodEnd ?? Date.now(),
                 ).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}`
@@ -317,17 +351,37 @@ export function PlanUsageCard({ compact = false }: { compact?: boolean }) {
                   }`
                 : 'Subscribe to unlock analyses and drafts'}
           </p>
+          {pendingChange ? (
+            <p className="mt-1 text-xs text-muted-foreground">{pendingChange}</p>
+          ) : null}
         </div>
-        {usage.signedIn && active && !canceling && usage.planId !== 'business' ? (
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={busy === 'cancel'}
-            onClick={() => setConfirmCancelOpen(true)}
-          >
-            {busy === 'cancel' ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : null}
-            Cancel subscription
-          </Button>
+        {usage.signedIn && active && usage.planId !== 'business' ? (
+          canceling && providerEnded ? (
+            <Button variant="outline" size="sm"               onClick={() => void handleCheckout(usage.planId ?? 'individual', 'new')}>
+              {busy === 'checkout' ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : null}
+              Resubscribe
+            </Button>
+          ) : canceling ? (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy === 'resume'}
+              onClick={() => void handleResume()}
+            >
+              {busy === 'resume' ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : null}
+              Keep my plan
+            </Button>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy === 'cancel'}
+              onClick={() => setConfirmCancelOpen(true)}
+            >
+              {busy === 'cancel' ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : null}
+              Cancel subscription
+            </Button>
+          )
         ) : null}
       </div>
 
@@ -393,8 +447,17 @@ export function PlanUsageCard({ compact = false }: { compact?: boolean }) {
         <div className="mt-4">
           {canceling ? (
             <p className="mb-2 text-xs leading-relaxed text-muted-foreground">
-              Your current plan stays active until it ends — renew to keep it going or pick a
-              different plan.
+              {providerEnded ? (
+                <>
+                  Your plan is canceled and will not renew
+                  {usage.periodEnd
+                    ? ` after ${new Date(usage.periodEnd).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`
+                    : ''}
+                  . Resubscribe above to keep it going.
+                </>
+              ) : (
+                'Your current plan stays active until it ends. Use “Keep my plan” to keep it renewing, or pick a plan below to switch.'
+              )}
             </p>
           ) : null}
           <div className="flex flex-wrap items-center gap-2">
@@ -455,7 +518,8 @@ export function PlanUsageCard({ compact = false }: { compact?: boolean }) {
                 Cancel your subscription?
               </h2>
               <p className="mt-1 text-sm text-muted-foreground">
-                Your plan stays active until the end of the current month.
+                Your plan stays active until the end of the current month, and you will not
+                be charged again.
               </p>
             </div>
             <button
