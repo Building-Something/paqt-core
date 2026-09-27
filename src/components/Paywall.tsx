@@ -7,6 +7,7 @@ import { supabase } from '../lib/supabase';
 import { PlanPicker } from './PlanPicker';
 import { Spinner } from './ui/feedback';
 import { startCheckout, type PaqtPlan } from '../services/billingService';
+import { openSubscriptionCheckout } from '../services/razorpayCheckout';
 
 export function Paywall() {
   const { session } = useAuth();
@@ -22,17 +23,26 @@ export function Paywall() {
     setBusyPlanId(plan.id);
     try {
       const checkout = await startCheckout(supabase, plan.id);
-      if (checkout.shortUrl) {
-        window.open(checkout.shortUrl, '_blank', 'noopener,noreferrer');
-        toast(
-          'info',
-          'Payment opened in a new tab. Complete it there — your plan activates automatically.',
-          9000,
-        );
-      } else {
-        toast('error', 'Could not start checkout. Please try again.');
+      if (!checkout.key || !checkout.subscriptionId) {
+        throw new Error('Could not start checkout. Please try again.');
       }
+      const outcome = await openSubscriptionCheckout({
+        key: checkout.key,
+        subscriptionId: checkout.subscriptionId,
+        name: 'Paqt',
+        description: `${plan.name} plan`,
+        prefillName:
+          typeof session.user.user_metadata?.full_name === 'string'
+            ? session.user.user_metadata.full_name
+            : undefined,
+        prefillEmail: session.user.email ?? undefined,
+      });
       await refresh();
+      if (outcome === 'paid') {
+        toast('success', 'Payment received — your plan is activating.');
+      } else {
+        toast('info', 'Checkout closed. You can pay anytime from here.');
+      }
     } catch (error) {
       toast('error', error instanceof Error ? error.message : 'Could not start checkout.');
     } finally {
