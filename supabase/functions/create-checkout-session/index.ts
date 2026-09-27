@@ -106,16 +106,23 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Reuse a checkout that is still in flight for the same plan instead of
-    // stacking short-links.
+    // Reuse a checkout that is still genuinely in flight for the same plan
+    // instead of stacking short-links, but never reuse one that has gone
+    // stale: an abandoned auth/QR attempt poisons the subscription and the
+    // payment step 400s ("payment not allowed at this stage"). Anything older
+    // than the window is cancelled and replaced with a fresh subscription.
+    const INFLIGHT_WINDOW_MS = 10 * 60 * 1000;
     const { data: inflight } = await supabase
       .from('subscriptions')
-      .select('razorpay_subscription_id, plan_id, short_url, status')
+      .select('id, razorpay_subscription_id, plan_id, short_url, status, created_at')
       .eq('user_id', user.id)
       .in('status', ['created', 'authenticated'])
-      .limit(5);
+      .order('created_at', { ascending: false })
+      .limit(10);
+    const deadline = Date.now() - INFLIGHT_WINDOW_MS;
     const matching = (inflight ?? []).find(
-      (row: { plan_id: string }) => row.plan_id === planId,
+      (row: { plan_id: string; created_at: string }) =>
+        row.plan_id === planId && new Date(row.created_at).getTime() >= deadline,
     );
     if (matching) {
       const sub = await razorpayJson<RazorpaySubscriptionEntity>(
@@ -128,6 +135,16 @@ Deno.serve(async (req) => {
         planId,
         key: razorpayKeyId,
       });
+    }
+    for (const stale of inflight ?? []) {
+      try {
+        await razorpayJson(`/subscriptions/${stale.razorpay_subscription_id}/cancel`, {
+          method: 'POST',
+          body: '{}',
+        });
+      } catch {
+        // Already cancelled or unreachable; the fresh one below is what matters.
+      }
     }
 
     // Razorpay customer: one per Paqt user.
@@ -159,8 +176,9 @@ Deno.serve(async (req) => {
 
     // Auto-renewing monthly subscription that keeps charging each cycle until
     // the user cancels (autopay on by default). Razorpay does not accept
-    // total_count: 0 on creation, so we bound it to the maximum allowed
-    // duration (100 years = 1200 monthly cycles); cancellation ends it early.
+    // total_count: 0 on creation and rejects payments when the subscription
+    // extends past its documented 10-year window, so we bound it to 120
+    // monthly cycles (10 years); cancellation ends it early.
     const subscription = await razorpayJson<RazorpaySubscriptionEntity>(
       '/subscriptions',
       {
@@ -168,7 +186,7 @@ Deno.serve(async (req) => {
         body: JSON.stringify({
           plan_id: priceId,
           customer_id: customerId,
-          total_count: 1200,
+          total_count: 120,
           customer_notify: true,
           notes: {
             user_id: user.id,
