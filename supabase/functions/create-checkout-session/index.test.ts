@@ -341,6 +341,35 @@ describe('switching away from a paid period the provider already closed', () => 
     expect((await body(response)).paid_period_end).toBe(PERIOD_END);
   });
 
+  it('records the booked switch on the entitled row so it survives a reload', async () => {
+    await handler(post({ plan_id: 'pro' }));
+
+    // The replacement grants nothing until it starts, so without this the only
+    // record of the switch was the response to the click and it vanished.
+    const stamped = rpc(db, 'paqt_set_pending_plan');
+    expect(stamped).toHaveLength(1);
+    expect(stamped[0].args).toMatchObject({
+      p_user: 'user-1',
+      p_plan_id: 'pro',
+      p_change_at: PERIOD_END,
+      p_kind: 'upgrade',
+    });
+  });
+
+  it('does not stamp a pending plan on a genuine fresh purchase', async () => {
+    db = signedIn();
+    handler = await loadHandler();
+    installRazorpay({
+      createdCustomer: { id: 'cust_new' },
+      createdSubscription: freshSubscription(),
+    });
+
+    await handler(post({ plan_id: 'individual' }));
+
+    // Nothing is being replaced, so there is no switch to confirm.
+    expect(rpc(db, 'paqt_set_pending_plan')).toHaveLength(0);
+  });
+
   it('does not claim a grace period for a still-live subscription', async () => {
     db = signedIn({
       rpcResults: {

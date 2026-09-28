@@ -481,6 +481,29 @@ Deno.serve(async (req) => {
     });
     await stopOnConflict(admin, created, user.id);
 
+    // The replacement grants nothing until its period starts, so the entitlement
+    // read model ignores it entirely and the switch would exist only in the reply
+    // to this click. Record it on the row that is currently entitled so the plan
+    // & billing card can confirm the booking on every later visit, not just the
+    // one that made it.
+    if (residualStartSec !== undefined) {
+      try {
+        const { error: pendingError } = await admin.rpc('paqt_set_pending_plan', {
+          p_user: user.id,
+          p_plan_id: planId,
+          p_change_at: ms(residualStartSec),
+          p_kind: 'upgrade',
+        });
+        if (pendingError) {
+          // The switch itself is already booked at Razorpay, so this is only the
+          // confirmation copy. Losing it must not fail the purchase.
+          console.warn('[checkout] could not record the pending plan:', pendingError.message);
+        }
+      } catch (err) {
+        console.warn('[checkout] could not record the pending plan:', (err as Error)?.message);
+      }
+    }
+
     const response = {
       key_id: razorpayKeyId(),
       subscription_id: created.id,

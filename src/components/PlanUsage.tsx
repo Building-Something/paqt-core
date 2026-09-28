@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { Loader2, ScanSearch, FilePenLine, ArrowUpRight, Coins } from 'lucide-react';
+import { Loader2, ScanSearch, FilePenLine, ArrowUpRight, Coins, CalendarClock } from 'lucide-react';
 import { useEntitlement } from '../contexts/EntitlementContext';
 import { useUpgrade } from './UpgradeDialog';
 import { useToast } from '../contexts/ToastContext';
@@ -170,6 +170,11 @@ export function PlanUsageChip() {
 const ACTIVATION_POLL_MS = 2000;
 const MAX_ACTIVATION_POLLS = 8;
 
+/** Day and month, e.g. "26 Oct". A switch date is a calendar day, not a time. */
+function formatSwitchDate(ms: number): string {
+  return new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+}
+
 export function PlanUsageCard({ compact = false }: { compact?: boolean }) {
   const { usage, loading, refresh } = useEntitlement();
   const { toast } = useToast();
@@ -191,6 +196,10 @@ export function PlanUsageCard({ compact = false }: { compact?: boolean }) {
     }
   }, [canceling]);
   const pendingChange = pendingChangeMessage(usage);
+  // A booked replacement answers what happens next, so the copy that describes a
+  // lapsing plan has to stand down: telling someone who is switching to Pro that
+  // their plan "will not renew" and to resubscribe is simply wrong.
+  const switching = Boolean(usage.signedIn && usage.pendingPlanId);
 
   // Keep a render-free handle on the freshest usage so the post-payment poller
   // below can read it without re-subscribing on every refresh.
@@ -348,9 +357,15 @@ export function PlanUsageCard({ compact = false }: { compact?: boolean }) {
               ? `${usage.planName ?? 'Your plan'} stays active until ${new Date(
                   usage.periodEnd ?? Date.now(),
                 ).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}${
-                  // Razorpay has closed the subscription, so unlike a scheduled
-                  // cancellation this one cannot be undone from here.
-                  providerEnded ? ' · will not renew' : ' · cancelled'
+                  // "will not renew" next to a booked switch reads like access is
+                  // about to lapse, so name where it goes instead.
+                  switching
+                    ? ` · then switches to ${usage.pendingPlanName ?? 'your new plan'}`
+                    : // Razorpay has closed the subscription, so unlike a scheduled
+                      // cancellation this one cannot be undone from here.
+                      providerEnded
+                      ? ' · will not renew'
+                      : ' · cancelled'
                 }`
               : active
                 ? `${usage.planName ?? 'Active plan'}${
@@ -363,11 +378,11 @@ export function PlanUsageCard({ compact = false }: { compact?: boolean }) {
                   }`
                 : 'Subscribe to unlock analyses and drafts'}
           </p>
-          {pendingChange ? (
+          {pendingChange && !switching ? (
             <p className="mt-1 text-xs text-muted-foreground">{pendingChange}</p>
           ) : null}
         </div>
-        {usage.signedIn && active && usage.planId !== 'business' ? (
+        {usage.signedIn && active && usage.planId !== 'business' && !switching ? (
           canceling && providerEnded ? (
             <Button variant="outline" size="sm"               onClick={() => void handleCheckout(usage.planId ?? 'individual', 'new')}>
               {busy === 'checkout' ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : null}
@@ -459,7 +474,18 @@ export function PlanUsageCard({ compact = false }: { compact?: boolean }) {
         <div className="mt-4">
           {canceling ? (
             <p className="mb-2 text-xs leading-relaxed text-muted-foreground">
-              {providerEnded ? (
+              {switching ? (
+                <>
+                  {usage.pendingPlanName ?? 'Your new plan'} takes over on{' '}
+                  {usage.pendingChangeAt
+                    ? new Date(usage.pendingChangeAt).toLocaleDateString(undefined, {
+                        day: 'numeric',
+                        month: 'short',
+                      })
+                    : 'the next cycle'}
+                  . Nothing to do here.
+                </>
+              ) : providerEnded ? (
                 <>
                   Your plan is canceled and will not renew
                   {usage.periodEnd
@@ -515,6 +541,29 @@ export function PlanUsageCard({ compact = false }: { compact?: boolean }) {
         </div>
       ) : null}
     </Card>
+
+    {/* A booked switch has to be confirmable after the fact, not just in the toast
+        that flashed when it was made. The new subscription grants nothing until
+        its period starts, so nothing else in this card would mention it. */}
+    {usage.signedIn && usage.pendingPlanId ? (
+      <Card className="border-primary/30 bg-primary/5 p-5" role="status">
+        <div className="flex items-start gap-3">
+          <CalendarClock className="mt-0.5 size-5 shrink-0 text-primary" aria-hidden="true" />
+          <div className="min-w-0">
+            <h2 className="text-sm font-semibold text-foreground">
+              {usage.pendingPlanName ?? 'Your new plan'} is booked
+            </h2>
+            <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+              {usage.planName ?? 'Your current plan'} stays active until{' '}
+              {usage.pendingChangeAt ? formatSwitchDate(usage.pendingChangeAt) : 'the end of this period'}.{' '}
+              {usage.pendingPlanName ?? 'The new plan'} starts{' '}
+              {usage.pendingChangeAt ? `on ${formatSwitchDate(usage.pendingChangeAt)}` : 'after that'}, and you
+              are charged then — nothing is charged today.
+            </p>
+          </div>
+        </div>
+      </Card>
+    ) : null}
 
     <ConfirmDialog
       open={confirmCancelOpen}
