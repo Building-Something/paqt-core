@@ -608,6 +608,23 @@ export async function resumeSubscription(): Promise<SubscriptionInfo> {
 }
 
 /**
+ * Stops every subscription that could still bill this customer, immediately.
+ *
+ * Used only by account deletion. Unlike `cancelSubscription`, which acts on the
+ * single live subscription and keeps any paid period, this sweeps subscriptions
+ * that are merely *armed* — created, authenticated or pending with a future
+ * charge — because a deferred plan replacement leaves one behind and it would
+ * bill a customer whose account no longer exists.
+ */
+export async function purgeSubscriptions(): Promise<SubscriptionInfo> {
+  const info = normalizeSubscriptionInfo(
+    await callBillingEdge('subscription-manage', { action: 'purge_all' }),
+  );
+  resetCheckoutIdempotencyKey();
+  return info;
+}
+
+/**
  * Explains a checkout that resolved as 'reconciled': Paqt had lost track of a
  * subscription the customer had already paid for, rebuilt it from Razorpay, and
  * deliberately did NOT take a second payment.

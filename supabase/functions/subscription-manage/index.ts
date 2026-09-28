@@ -135,6 +135,80 @@ async function resolveTargetSubscription(
   return result.live;
 }
 
+/**
+ * Every subscription that could still take a payment for this customer, found by
+ * asking the provider rather than by trusting local rows.
+ *
+ * Account deletion is the one flow where *all* of them matter, not just the one
+ * `resolveTargetSubscription` returns. That helper stops at the first live
+ * subscription, but a deferred plan replacement leaves a second live row behind
+ * (`created`/`authenticated`, which map to `authenticating`), and it is armed to
+ * charge at the boundary. Cancelling only the first one deletes the account and
+ * leaves the second billing a customer who no longer exists.
+ */
+async function findAllCancellable(
+  admin: ReturnType<typeof createAdmin>,
+  userId: string,
+  state: BillingState | null,
+): Promise<RazorpaySubscription[]> {
+  const customerId = state?.razorpay_customer_id ?? state?.last_razorpay_customer_id ?? null;
+  const trackedId = state?.razorpay_subscription_id ?? state?.last_razorpay_subscription_id ?? null;
+  if (!customerId) {
+    return [];
+  }
+  const items = await listSubscriptions(customerId, trackedId);
+  return items.filter((sub) => isLiveStatus(mapRazorpayStatus(sub.status)));
+}
+
+/** True when Razorpay says the subscription is already closed, so cancelling is moot. */
+function isAlreadyGone(err: unknown): boolean {
+  if (!(err instanceof RazorpayError)) {
+    return false;
+  }
+  return err.status === 400 || err.status === 404;
+}
+
+/**
+ * Cancels every armed subscription for a customer immediately.
+ *
+ * Deliberately immediate rather than at cycle end: the paid period exists to give
+ * someone access they can use, and an account being erased has no owner left to
+ * give it to. Anything that has already charged stays recorded in
+ * `payment_transactions`; only the future billing is stopped.
+ *
+ * Returns the ids that could not be closed, so the caller can refuse to delete
+ * the login rather than orphan a live charge.
+ */
+async function purgeAllSubscriptions(
+  admin: ReturnType<typeof createAdmin>,
+  userId: string,
+  items: RazorpaySubscription[],
+): Promise<string[]> {
+  const failed: string[] = [];
+  for (const sub of items) {
+    try {
+      const cancelled = await cancelNow(sub.id);
+      // Written through so the local row matches the provider before the auth row
+      // cascades away; otherwise a later webhook finds nothing to update.
+      await applySubscription(admin, {
+        sub: cancelled,
+        userId,
+        overrideStatus: 'canceled',
+        terminal: true,
+      });
+    } catch (err) {
+      // Already closed upstream is a success for our purposes: the goal is "this
+      // cannot charge", and it cannot.
+      if (isAlreadyGone(err)) {
+        continue;
+      }
+      console.error(`[subscription-manage] could not cancel ${sub.id} on account deletion:`, (err as Error)?.message);
+      failed.push(sub.id);
+    }
+  }
+  return failed;
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return preflight(req);
@@ -150,7 +224,9 @@ Deno.serve(async (req) => {
     const action =
       body.action === 'cancel' || body.action === 'resume' || body.action === 'status'
         ? body.action
-        : 'status';
+        : body.action === 'purge_all'
+          ? 'purge_all'
+          : 'status';
 
     await syncEntitlement(admin, user.id);
     let state = await getBillingState(admin, user.id);
@@ -172,6 +248,31 @@ Deno.serve(async (req) => {
 
     if (action === 'status') {
       return jsonBody(clientView(state, { reconciled }), req);
+    }
+
+    // Account deletion. Runs before the single-subscription path below because it
+    // must sweep *every* armed subscription, not just the first live one, and it
+    // must not fall through to the "you have no subscription to cancel" 409 that
+    // a user with only a pending replacement would otherwise get.
+    if (action === 'purge_all') {
+      const items = await findAllCancellable(admin, user.id, state);
+      const failed = await purgeAllSubscriptions(admin, user.id, items);
+      state = await getBillingState(admin, user.id);
+      if (failed.length > 0) {
+        // The login must survive: once the auth row cascades away there is nothing
+        // left to reconcile these against, and the customer would be billed with no
+        // way for us or for them to stop it.
+        throw new HttpError(
+          502,
+          'purge_incomplete',
+          'Could not stop every subscription at the payment provider, so your account was not deleted. Please contact support to finish cancelling billing.',
+          { failed_subscription_ids: failed },
+        );
+      }
+      return jsonBody(
+        clientView(state, { cancelled: true, purged: items.length, canceled_immediately: true }),
+        req,
+      );
     }
 
     const live = await resolveTargetSubscription(admin, user.id, state);

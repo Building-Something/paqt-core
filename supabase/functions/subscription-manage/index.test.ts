@@ -352,4 +352,144 @@ describe('resume', () => {
     expect(response.status).toBe(409);
     expect((await body(response)).error.code).toBe('no_subscription');
   });
+
+  // Account deletion. The live-only lookup below is not enough here: a deferred
+  // plan replacement leaves a second subscription that is `authenticated` with a
+  // future charge, which grants no access (so it is not "live") but is still armed
+  // to take money from an account that no longer exists.
+  describe('account deletion purge', () => {
+    /** A replacement that has not started billing yet but will. */
+    function armedReplacement() {
+      return {
+        id: 'sub_future',
+        plan_id: 'plan_pro',
+        customer_id: 'cust_1',
+        status: 'authenticated',
+        created_at: SEC(NOW - DAY),
+        start_at: SEC(NOW + 20 * DAY),
+        charge_at: SEC(NOW + 20 * DAY),
+        current_start: null,
+        current_end: null,
+        cancel_at_cycle_end: false,
+        has_scheduled_changes: false,
+        notes: { user_id: 'user-1' },
+      };
+    }
+
+    it('cancels a pending replacement that the live-only path would miss', async () => {
+      const future = armedReplacement();
+      db = signedIn(ACTIVE_STATE);
+      handler = await loadHandler();
+      const rzp = installRazorpay({
+        byId: { sub_live: liveSubscription(), sub_future: { ...future, status: 'cancelled' } },
+        subscriptions: [liveSubscription(), future],
+        patched: { sub_live: { ...liveSubscription(), status: 'cancelled' }, sub_future: { ...future, status: 'cancelled' } },
+      });
+
+      const response = await handler(post({ action: 'purge_all' }));
+
+      expect(response.status).toBe(200);
+      const cancelled = rzp.calls
+        .filter((call) => call.method === 'POST' && /\/cancel$/.test(call.url))
+        .map((call) => call.url);
+      // The whole point: the armed replacement is cancelled, not just the live one.
+      expect(cancelled).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining('sub_live'),
+          expect.stringContaining('sub_future'),
+        ]),
+      );
+      expect((await body(response)).purged).toBe(2);
+    });
+
+    it('cancels immediately rather than keeping the paid period', async () => {
+      db = signedIn(ACTIVE_STATE);
+      handler = await loadHandler();
+      const rzp = installRazorpay({
+        byId: { sub_live: { ...liveSubscription(), status: 'cancelled' } },
+        patched: { sub_live: { ...liveSubscription(), status: 'cancelled' } },
+      });
+
+      await handler(post({ action: 'purge_all' }));
+
+      // No deferred cancel is scheduled: a deleted account has no owner left to
+      // honour access for, and the auth row is about to cascade away regardless.
+      const scheduled = rzp.calls.filter((call) => /cancel_at_cycle_end/.test(call.url));
+      expect(scheduled).toHaveLength(0);
+    });
+
+    it('treats an already-deleted subscription upstream as a completed purge', async () => {
+      db = signedIn(ACTIVE_STATE);
+      handler = await loadHandler();
+      // 404 means the subscription no longer exists at Razorpay, so it cannot take
+      // a charge and must not be reported as a failure that blocks deletion.
+      installRazorpay({ byId: { sub_live: liveSubscription() }, missing: ['sub_future'] });
+
+      const response = await handler(post({ action: 'purge_all' }));
+
+      expect(response.status).toBe(200);
+      expect((await body(response)).purged).toBe(1);
+    });
+
+    it('refuses to complete when a subscription cannot be stopped', async () => {
+      db = signedIn(ACTIVE_STATE);
+      handler = await loadHandler();
+      const rzp = installRazorpay({
+        byId: { sub_live: liveSubscription() },
+        subscriptions: [liveSubscription(), armedReplacement()],
+      });
+      // Razorpay is unreachable: the cancel fails with a 5xx that is not a
+      // "already closed" answer, so the subscription may still be armed to charge.
+      rzp.calls.length = 0;
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (input: any) => {
+          const url = String(input);
+          if (/\/cancel$/.test(url)) {
+            return new Response(
+              JSON.stringify({ error: { code: 'SERVER_ERROR', description: 'upstream down' } }),
+              { status: 500, headers: { 'Content-Type': 'application/json' } },
+            );
+          }
+          return new Response(JSON.stringify({ items: [liveSubscription(), armedReplacement()] }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }),
+      );
+
+      const response = await handler(post({ action: 'purge_all' }));
+
+      // The login must survive, or the customer is billed for a deleted account.
+      expect(response.status).toBe(502);
+      expect((await body(response)).error.code).toBe('purge_incomplete');
+    });
+
+    it('does not touch subscriptions belonging to another customer', async () => {
+      db = signedIn(ACTIVE_STATE);
+      handler = await loadHandler();
+      const foreign = { ...armedReplacement(), id: 'sub_someone_else', customer_id: 'cust_other' };
+      const rzp = installRazorpay({
+        byId: { sub_live: { ...liveSubscription(), status: 'cancelled' } },
+        subscriptions: [liveSubscription(), foreign],
+        patched: { sub_live: { ...liveSubscription(), status: 'cancelled' } },
+      });
+
+      await handler(post({ action: 'purge_all' }));
+
+      const cancelled = rzp.calls.filter((call) => call.method === 'POST' && /\/cancel$/.test(call.url));
+      expect(cancelled.map((call) => call.url).join(' ')).not.toContain('sub_someone_else');
+    });
+
+    it('succeeds and cancels nothing when the customer has no subscriptions', async () => {
+      db = signedIn({ ...ACTIVE_STATE, has_subscription: false, status: 'none', razorpay_subscription_id: null });
+      handler = await loadHandler();
+      const rzp = installRazorpay({ byId: {}, subscriptions: [] });
+
+      const response = await handler(post({ action: 'purge_all' }));
+
+      expect(response.status).toBe(200);
+      expect(rzp.calls.filter((call) => call.method === 'POST' && /\/cancel$/.test(call.url))).toHaveLength(0);
+    });
+  });
 });
