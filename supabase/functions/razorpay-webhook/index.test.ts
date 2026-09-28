@@ -44,12 +44,18 @@ function sign(raw: string, secret = SECRET): string {
   return createHmac('sha256', secret).update(raw).digest('hex');
 }
 
-function post(raw: string, signature?: string): Request {
+/** The args the function passed to one RPC, so an id can be asserted on. */
+function rpcArgs(db: FakeDb, name: string): Record<string, unknown>[] {
+  return db.rpcCalls.filter((call) => call.name === name).map((call) => call.args as Record<string, unknown>);
+}
+
+function post(raw: string, signature?: string, eventId?: string): Request {
   return new Request('https://project.supabase.co/functions/v1/razorpay-webhook', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       ...(signature === undefined ? {} : { 'x-razorpay-signature': signature }),
+      ...(eventId === undefined ? {} : { 'x-razorpay-event-id': eventId }),
     },
     body: raw,
   });
@@ -310,5 +316,29 @@ describe('verified event handling', () => {
 
     expect(response.status).toBe(200);
     expect(rpcCallCount(db, 'paqt_upsert_subscription')).toBe(0);
+  });
+
+  // A real delivery carries the event id in `x-razorpay-event-id` and no `id` in
+  // the body. Reading only the body field made every live event look id-less, so
+  // it was never claimed and never written to `webhook_events`.
+  it('claims the event using the id from the x-razorpay-event-id header', async () => {
+    const { id: _omitted, ...withoutBodyId } = activatedEvent();
+    const raw = JSON.stringify(withoutBodyId);
+
+    const response = await handler(post(raw, sign(raw), 'evt_header_only'));
+
+    expect(response.status).toBe(200);
+    expect(rpcCallCount(db, 'paqt_claim_webhook_event')).toBe(1);
+    expect(rpcArgs(db, 'paqt_claim_webhook_event')[0]?.p_event_id).toBe('evt_header_only');
+    expect(rpcCallCount(db, 'paqt_complete_webhook_event')).toBe(1);
+    expect(rpcArgs(db, 'paqt_complete_webhook_event')[0]?.p_event_id).toBe('evt_header_only');
+  });
+
+  it('still claims events that only carry the id in the body', async () => {
+    const raw = JSON.stringify(activatedEvent());
+    await handler(post(raw, sign(raw)));
+
+    expect(rpcCallCount(db, 'paqt_claim_webhook_event')).toBe(1);
+    expect(rpcArgs(db, 'paqt_claim_webhook_event')[0]?.p_event_id).toBe('evt_1');
   });
 });

@@ -35,6 +35,8 @@ interface RazorpayEvent {
   id?: string;
   event?: string;
   created_at?: number;
+  // Razorpay repeats the id inside the body under `event_id` on some deliveries.
+  event_id?: string;
   payload?: {
     subscription?: EntityOrWrapper<RazorpaySubscription>;
     payment?: EntityOrWrapper<RazorpayPayment>;
@@ -109,9 +111,21 @@ interface ProcessResult {
  * uniqueness, subscription upsert), so a redelivery of an already-applied event
  * changes nothing — which is what makes Razorpay's at-least-once delivery safe.
  */
-async function processEvent(admin: Admin, event: RazorpayEvent): Promise<ProcessResult> {
+async function processEvent(
+  admin: Admin,
+  event: RazorpayEvent,
+  headerEventId = '',
+): Promise<ProcessResult> {
   const type = event.event ?? '';
-  const eventId = typeof event.id === 'string' && event.id ? event.id : '';
+
+  // Razorpay's canonical event id lives in the `x-razorpay-event-id` header, not
+  // in the body. Reading only `event.id` meant every real delivery looked
+  // id-less: the claim was skipped, so nothing was written to `webhook_events`
+  // and redeliveries had no dedup to lean on.
+  const eventId =
+    headerEventId ||
+    (typeof event.id === 'string' ? event.id : '') ||
+    (typeof event.event_id === 'string' ? event.event_id : '');
   const eventAt = typeof event.created_at === 'number' ? ms(event.created_at) : null;
 
   if (!eventId) {
@@ -439,10 +453,13 @@ Deno.serve(async (req) => {
   }
 
   const admin = createAdmin();
+  // One delivery can carry several events, but the header names the delivery. It
+  // only identifies the first one; the rest fall back to their own body ids.
+  const deliveryEventId = req.headers.get('x-razorpay-event-id') ?? '';
   let handled = 0;
   try {
-    for (const event of events) {
-      const result = await processEvent(admin, event);
+    for (const [index, event] of events.entries()) {
+      const result = await processEvent(admin, event, index === 0 ? deliveryEventId : '');
       if (result.handled) {
         handled += 1;
       }
