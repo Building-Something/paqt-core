@@ -383,12 +383,12 @@ export function PlanUsageCard({ compact = false }: { compact?: boolean }) {
           ) : null}
         </div>
         {usage.signedIn && active && usage.planId !== 'business' && !switching ? (
-          canceling && providerEnded ? (
-            <Button variant="outline" size="sm"               onClick={() => void handleCheckout(usage.planId ?? 'individual', 'new')}>
-              {busy === 'checkout' ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : null}
-              Resubscribe
-            </Button>
-          ) : canceling ? (
+          // Once Razorpay has closed the subscription there is nothing left to
+          // resume or cancel, and a dedicated "Resubscribe" button was a trap: it
+          // started a second Individual running from the period boundary while
+          // stamping "Individual is booked" onto a row that was already Individual.
+          // Buying the plan again in the row below covers the same ground honestly.
+          canceling && !providerEnded ? (
             <Button
               variant="outline"
               size="sm"
@@ -398,7 +398,7 @@ export function PlanUsageCard({ compact = false }: { compact?: boolean }) {
               {busy === 'resume' ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : null}
               Keep my plan
             </Button>
-          ) : (
+          ) : canceling ? null : (
             <Button
               variant="outline"
               size="sm"
@@ -491,7 +491,7 @@ export function PlanUsageCard({ compact = false }: { compact?: boolean }) {
                   {usage.periodEnd
                     ? ` after ${new Date(usage.periodEnd).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`
                     : ''}
-                  . Resubscribe above to keep it going.
+                  . Buy the plan below again whenever you want to start a new period.
                 </>
               ) : (
                 'Your current plan stays active until it ends. Use “Keep my plan” to keep it renewing, or pick a plan below to switch.'

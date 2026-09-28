@@ -82,12 +82,20 @@ describe('PlanUsageCard cancel states', () => {
     expect(screen.queryByText(/Resubscribe above/)).toBeNull();
   });
 
-  it('offers Resubscribe when the provider ended and nothing is booked', async () => {
+  // Once the provider has closed the subscription, buying the plan again in the
+  // plans row is the only way back. A dedicated Resubscribe button also used to
+  // stamp a self-referential pending plan, so it must stay gone.
+  it('offers no call to action when the provider ended and nothing is booked', async () => {
     usage = cancelingUsage();
     renderCard();
 
-    expect(await screen.findByRole('button', { name: /Resubscribe/ })).toBeTruthy();
+    await waitFor(() => expect(manageMock).toHaveBeenCalled());
+
+    expect(screen.queryByRole('button', { name: /Resubscribe/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /Keep my plan/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Cancel subscription/ })).toBeNull();
+    expect(screen.queryByText(/Resubscribe above/)).toBeNull();
+    expect(screen.getByRole('button', { name: /Renew/ })).toBeTruthy();
     expect(screen.queryByText(/Pro is booked/)).toBeNull();
   });
 

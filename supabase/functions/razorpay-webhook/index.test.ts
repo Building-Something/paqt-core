@@ -17,6 +17,7 @@ const NOW = Date.UTC(2026, 0, 15);
 const DAY = 86_400_000;
 
 const INDIVIDUAL = { id: 'individual', name: 'Individual', price_id: 'plan_ind', is_active: true };
+const PRO = { id: 'pro', name: 'Pro', price_id: 'plan_pro', is_active: true };
 
 /** A real-looking `subscription.activated` event. */
 function activatedEvent() {
@@ -77,7 +78,7 @@ beforeEach(async () => {
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
   edgeEnv.RAZORPAY_WEBHOOK_SECRET = SECRET;
-  db = createFakeDb({ plans: [INDIVIDUAL] });
+  db = createFakeDb({ plans: [INDIVIDUAL, PRO] });
   installRazorpay({});
   handler = await loadHandler();
 });
@@ -229,6 +230,51 @@ describe('verified event handling', () => {
 
     const upsert = db.rpcCalls.find((call) => call.name === 'paqt_upsert_subscription');
     expect(upsert?.args.p_snapshot.current_period_end).toBeNull();
+  });
+
+  it('hands entitlement over when a scheduled replacement starts', async () => {
+    // The Oct 27 boundary: the replacement is now `active` with a period that has
+    // begun, so this is the event that has to move the account off the outgoing
+    // plan. Nothing short of the provider telling us this may grant it.
+    const event = activatedEvent();
+    event.id = 'evt_switch';
+    event.payload.subscription.id = 'sub_pro';
+    event.payload.subscription.plan_id = 'plan_pro';
+    event.payload.subscription.status = 'active';
+    event.payload.subscription.current_start = Math.floor((NOW - 60_000) / 1000);
+    event.payload.subscription.current_end = Math.floor((NOW + 30 * DAY) / 1000);
+    const raw = JSON.stringify(event);
+
+    const response = await handler(post(raw, sign(raw)));
+
+    expect(response.status).toBe(200);
+    const upsert = db.rpcCalls.find((call) => call.name === 'paqt_upsert_subscription');
+    expect(upsert?.args.p_snapshot.razorpay_plan_id).toBe('plan_pro');
+    // A started period is what makes the row entitled rather than pending.
+    expect(upsert?.args.p_snapshot.current_period_start).toBe(NOW - 60_000);
+    expect(upsert?.args.p_snapshot.current_period_end).toBe(NOW + 30 * DAY);
+  });
+
+  it('does not hand over entitlement while the replacement period is still in the future', async () => {
+    // The same subscription one day early. `current_period_start` lies ahead, so
+    // paqt_current_entitlement cannot select it and the outgoing plan must keep
+    // serving. Granting here would give away a month nobody has paid for.
+    const event = activatedEvent();
+    event.id = 'evt_switch_early';
+    event.payload.subscription.id = 'sub_pro';
+    event.payload.subscription.plan_id = 'plan_pro';
+    event.payload.subscription.status = 'active';
+    event.payload.subscription.current_start = Math.floor((NOW + 29 * DAY) / 1000);
+    event.payload.subscription.current_end = Math.floor((NOW + 59 * DAY) / 1000);
+    const raw = JSON.stringify(event);
+
+    await handler(post(raw, sign(raw)));
+
+    const upsert = db.rpcCalls.find((call) => call.name === 'paqt_upsert_subscription');
+    expect(upsert?.args.p_snapshot.current_period_start).toBe(NOW + 29 * DAY);
+    // The webhook faithfully records what Razorpay said; refusing the handover is
+    // the read model's job, not the handler's, so this must still be written.
+    expect(upsert?.args.p_snapshot.status).toBe('active');
   });
 
   it('asks Razorpay to retry when processing fails', async () => {
