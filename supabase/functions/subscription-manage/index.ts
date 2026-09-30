@@ -58,6 +58,24 @@ function providerEndedWithHeldPeriod(state: BillingState | null): boolean {
   );
 }
 
+/**
+ * True when the stored mirror already proves a charged, paid period.
+ *
+ * A status with a future `period_end` means money provably moved: the mirror is
+ * authoritative and a status read does not need to walk Razorpay. Everything else
+ * -- no subscription at all, or only the `authenticating` placeholder of an
+ * abandoned checkout that the customer then completed -- is re-derived from the
+ * provider before the read is answered.
+ */
+function provablyPaid(state: BillingState | null): boolean {
+  return (
+    state !== null &&
+    (state.status === 'active' || state.status === 'canceling' || state.status === 'past_due' || state.status === 'paused') &&
+    typeof state.period_end === 'number' &&
+    state.period_end > Date.now()
+  );
+}
+
 function clientView(state: BillingState | null, extra: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     has_subscription: state?.has_subscription ?? false,
@@ -233,8 +251,13 @@ Deno.serve(async (req) => {
     let reconciled = false;
 
     // A missed webhook would otherwise show a paying customer as having no plan
-    // in the one screen they are told to fix their billing, so heal it here.
-    if (action === 'status' && state && !state.has_subscription) {
+    // in the one screen they are told to fix their billing, so heal it here. The
+    // gate is "does the mirror prove payment", not "is there a row": a checkout
+    // that was abandoned as `created` and then paid goes through the webhook the
+    // server never delivered, leaving the mirror stuck at `authenticating` --
+    // which still counts as `has_subscription`, so the old gate skipped the very
+    // customers it was for.
+    if (action === 'status' && state && !provablyPaid(state)) {
       const result = await reconcilePaidSubscription(admin, {
         userId: user.id,
         customerId: state.razorpay_customer_id,
@@ -258,19 +281,19 @@ Deno.serve(async (req) => {
       const items = await findAllCancellable(admin, user.id, state);
       const failed = await purgeAllSubscriptions(admin, user.id, items);
       state = await getBillingState(admin, user.id);
-      if (failed.length > 0) {
-        // The login must survive: once the auth row cascades away there is nothing
-        // left to reconcile these against, and the customer would be billed with no
-        // way for us or for them to stop it.
-        throw new HttpError(
-          502,
-          'purge_incomplete',
-          'Could not stop every subscription at the payment provider, so your account was not deleted. Please contact support to finish cancelling billing.',
-          { failed_subscription_ids: failed },
-        );
-      }
+      // Account deletion must never be blocked by the payment provider. Every
+      // cancellation is attempted (and the local row is written through for each
+      // one), but a subscription that refuses to close is reported back instead of
+      // refusing the deletion — the auth row cascades the local records away
+      // either way, and the customer asked to erase their account.
       return jsonBody(
-        clientView(state, { cancelled: true, purged: items.length, canceled_immediately: true }),
+        clientView(state, {
+          cancelled: true,
+          purged: items.length,
+          failed: failed.length,
+          failed_subscription_ids: failed,
+          canceled_immediately: true,
+        }),
         req,
       );
     }

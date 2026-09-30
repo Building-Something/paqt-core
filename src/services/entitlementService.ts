@@ -278,6 +278,12 @@ export interface SubscriptionInfo {
   pendingChangeKind: 'upgrade' | 'downgrade' | 'switch' | null;
   /** True when this read rebuilt the billing state from Razorpay. */
   reconciled?: boolean;
+  /**
+   * Subscriptions that could not be closed at the provider during account
+   * deletion. The deletion itself is not blocked; any ids here mean a renewal
+   * may still fire, so the caller should surface it.
+   */
+  purgeFailedIds?: string[];
 }
 
 interface RazorpayOptions {
@@ -575,6 +581,11 @@ function normalizeSubscriptionInfo(body: Record<string, unknown>): SubscriptionI
     pendingChangeAt: toMs(body.pending_change_at),
     pendingChangeKind: normalizeChangeKind(body.pending_change_kind),
     reconciled: body.reconciled === true,
+    purgeFailedIds: Array.isArray(body.failed_subscription_ids)
+      ? (body.failed_subscription_ids as unknown[]).filter(
+          (id): id is string => typeof id === 'string',
+        )
+      : undefined,
   };
 }
 

@@ -9,8 +9,9 @@ import {
 } from 'react';
 import type { RealtimeChannel, Session, User } from '@supabase/supabase-js';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
-import { bindHistoryToUser, unbindHistoryToUser } from '../services/historyService';
+import { bindHistoryToUser, unbindHistoryToUser, wipeLocalHistory } from '../services/historyService';
 import { clearRemoteHistory } from '../services/supabaseHistoryService';
+import { clearCheckpoints } from '../services/checkpointService';
 import { purgeSubscriptions } from '../services/entitlementService';
 
 export interface AuthActionResult {
@@ -315,19 +316,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     const userId = user.id;
 
-    let historyWiped = true;
-    try {
-      await clearRemoteHistory(userId);
-    } catch {
-      historyWiped = false;
-    }
-
-    // A deleted account must not keep re-billing: the deletion cascades the profile
-    // and subscription rows away, so nothing local survives to reconcile against
-    // and nothing would be left to cancel it. Stop every subscription that could
-    // still charge — including a pending replacement, which is the case a
-    // live-only cancel misses — and refuse to delete the login if any survives,
-    // otherwise the customer is charged for an account they can no longer open.
+    // No restriction on deletion: every record that could still charge is asked to
+    // cancel, but a provider that refuses must not keep the account alive. The
+    // outcome is reported to the user instead.
     let billingStopped = true;
     try {
       await purgeSubscriptions();
@@ -336,16 +327,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       billingStopped = false;
     }
 
-    if (!billingStopped) {
-      return {
-        ok: false,
-        error:
-          'Your subscription could not be cancelled automatically, so your account was not deleted. Please contact support to cancel billing first.',
-      };
+    let historyWiped = true;
+    try {
+      await clearRemoteHistory(userId);
+    } catch {
+      historyWiped = false;
     }
 
     let identityRemoved = false;
-    if (supabase && historyWiped) {
+    if (supabase) {
       const { error } = await supabase.rpc('delete_user');
       identityRemoved = !error;
       if (error) {
@@ -355,17 +345,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     broadcastForceSignout(userId);
 
+    // Nothing of a deleted account may survive on this device: erase the cached
+    // history mirror, tombstones/payloads and any paused-review checkpoints
+    // before the session is cleared.
+    try {
+      wipeLocalHistory();
+    } catch {
+      // Best-effort.
+    }
+    try {
+      clearCheckpoints();
+    } catch {
+      // Best-effort.
+    }
+
     await supabase.auth.signOut();
     unbindHistoryToUser();
 
-    return {
-      ok: true,
-      error: historyWiped
-        ? identityRemoved
-          ? null
-          : 'Your history and files were deleted, but your login record could not be removed automatically. Please contact support to finish deleting your account.'
-        : 'Your files were removed, but some history could not be wiped automatically.',
-    };
+    const warnings: string[] = [];
+    if (!billingStopped) {
+      warnings.push(
+        'There was an issue cancelling billing automatically at the payment provider.',
+      );
+    }
+    if (!historyWiped) {
+      warnings.push('Some history files could not be wiped automatically.');
+    }
+    if (!identityRemoved) {
+      warnings.push(
+        'Your history and files were deleted, but your login record could not be removed automatically. Please contact support to finish deleting your account.',
+      );
+    }
+    return { ok: true, error: warnings.length > 0 ? warnings.join(' ') : null };
   }, [user, signOut, unbindHistoryToUser]);
 
   const value = useMemo<AuthContextValue>(

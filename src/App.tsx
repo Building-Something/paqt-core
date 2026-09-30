@@ -7,6 +7,7 @@ import { EntitlementProvider } from './contexts/EntitlementContext';
 import { ToastProvider } from './contexts/ToastContext';
 import { UpgradeProvider } from './components/UpgradeDialog';
 import { AppShell } from './components/AppShell';
+import { AppErrorBoundary } from './components/AppErrorBoundary';
 import { RequireAuth } from './components/RequireAuth';
 import { DashboardPage } from './pages/DashboardPage';
 import { AnalyzeHubPage } from './pages/AnalyzeHubPage';
@@ -30,7 +31,8 @@ export default function App() {
               <UpgradeProvider>
                 <SettingsProvider>
                   <AnalysisProvider>
-                    <Routes>
+                    <AppErrorBoundary>
+                      <Routes>
                       <Route path="/" element={<LandingPage />} />
                       <Route path="/features" element={<FeaturesPage />} />
                       <Route path="/pricing" element={<PricingPage />} />
@@ -53,6 +55,7 @@ export default function App() {
                       </Route>
                       <Route path="*" element={<Navigate to="/" replace />} />
                     </Routes>
+                    </AppErrorBoundary>
                   </AnalysisProvider>
                 </SettingsProvider>
               </UpgradeProvider>

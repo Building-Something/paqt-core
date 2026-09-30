@@ -9,7 +9,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { serveHandlers, type EdgeHandler } from '../test/edgeEnv.ts';
-import { createFakeAdmin, createFakeDb, installRazorpay, type FakeDb } from '../test/harness.ts';
+import { createFakeAdmin, createFakeDb, installRazorpay, lastSnapshot, type FakeDb } from '../test/harness.ts';
 
 const NOW = Date.UTC(2026, 0, 15);
 const DAY = 86_400_000;
@@ -151,6 +151,36 @@ describe('status', () => {
     const response = await handler(post({ action: 'status' }));
 
     expect(response.status).toBe(200);
+  });
+
+  it('re-adopts a subscription Razorpay says is paid when the mirror is stuck at authenticating', async () => {
+    // The `subscription.activated` webhook never landed (a misconfigured Razorpay
+    // dashboard), so the local row still holds the `created` placeholder of an
+    // abandoned checkout -- status `authenticating`, no period -- even though the
+    // same subscription at Razorpay is active and has been charged. The old gate
+    // skipped the heal because the placeholder still counts as `has_subscription`;
+    // a status read must re-derive the row from the provider instead.
+    db = signedIn({
+      ...ACTIVE_STATE,
+      status: 'authenticating',
+      razorpay_status: 'created',
+      period_start: null,
+      period_end: null,
+    });
+    handler = await loadHandler();
+    installRazorpay({
+      byId: { sub_live: liveSubscription() },
+      subscriptions: [liveSubscription()],
+    });
+
+    const response = await handler(post({ action: 'status' }));
+    const payload = await body(response);
+
+    expect(response.status).toBe(200);
+    expect(payload.reconciled).toBe(true);
+    // The provider-backed snapshot was stored as a charged, paid subscription.
+    expect(lastSnapshot(db)?.status).toBe('active');
+    expect(lastSnapshot(db)?.current_period_end).toBe(NOW + 20 * DAY);
   });
 });
 
@@ -431,7 +461,7 @@ describe('resume', () => {
       expect((await body(response)).purged).toBe(1);
     });
 
-    it('refuses to complete when a subscription cannot be stopped', async () => {
+    it('reports an unstoppable subscription instead of blocking the deletion', async () => {
       db = signedIn(ACTIVE_STATE);
       handler = await loadHandler();
       const rzp = installRazorpay({
@@ -459,10 +489,14 @@ describe('resume', () => {
       );
 
       const response = await handler(post({ action: 'purge_all' }));
+      const payload = await body(response);
 
-      // The login must survive, or the customer is billed for a deleted account.
-      expect(response.status).toBe(502);
-      expect((await body(response)).error.code).toBe('purge_incomplete');
+      // A customer asking to erase their account must be able to, even if the
+      // provider refuses to close a subscription: the deletion proceeds and the
+      // ids that could not be stopped are reported to the client.
+      expect(response.status).toBe(200);
+      expect(payload.failed).toBe(2);
+      expect(payload.failed_subscription_ids).toEqual(expect.arrayContaining(['sub_live']));
     });
 
     it('does not touch subscriptions belonging to another customer', async () => {
