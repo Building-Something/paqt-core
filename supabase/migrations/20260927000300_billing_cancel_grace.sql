@@ -66,8 +66,35 @@ begin
      limit 1;
   end if;
 
+  -- The notes' user id can name a deleted account: account deletion cascades the
+  -- local rows away, so the snapshot's user resolves to a uuid that no longer
+  -- exists and the insert below would violate the FK forever (Razorpay redelivers
+  -- an event nothing can apply). Re-resolve from the stored customer and the
+  -- tracked subscription instead, so an account re-created for the same email
+  -- inherits the subscription it was already paying for.
+  if v_user is not null
+     and not exists (select 1 from auth.users u where u.id = v_user) then
+    v_user := null;
+    if v_customer is not null then
+      select p.user_id into v_user
+        from public.profiles p
+       where p.payment_customer_id = v_customer
+       limit 1;
+    end if;
+    if v_user is null and v_rzp_id is not null then
+      select s.user_id into v_user
+        from public.subscriptions s
+       where s.razorpay_subscription_id = v_rzp_id
+       limit 1;
+    end if;
+  end if;
+
   if v_user is null then
-    return jsonb_build_object('ok', false, 'reason', 'unknown_customer');
+    -- Orphan: no live Paqt account owns this subscription. Return without
+    -- throwing so the event is parked (not retried forever); entitlement is
+    -- granted the moment an account claims the customer.
+    return jsonb_build_object('ok', false, 'reason', 'orphan_event',
+                              'razorpay_subscription_id', v_rzp_id);
   end if;
 
   -- Razorpay refuses to schedule a cycle-end cancellation for some payment modes
