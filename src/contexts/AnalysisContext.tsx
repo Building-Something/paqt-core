@@ -455,7 +455,9 @@ export function AnalysisProvider({ children }: AnalysisProviderProps) {
       setPages(draftPages);
       setDraftMarkdown(markdown);
       setDisplayName(sourceNameRef.current);
-      await runAnalysis(null, draftPages);
+      // Text-based analyses are metered exactly like PDF uploads: the server only
+      // books a unit when the request carries a run id.
+      await runAnalysis(null, draftPages, { checkpointId: createId('analysis') });
     },
     [reset, runAnalysis],
   );
@@ -467,7 +469,21 @@ export function AnalysisProvider({ children }: AnalysisProviderProps) {
         return;
       }
       if (entry.draftMarkdown) {
-        await beginWithText(entry.name, entry.draftMarkdown);
+        // Restore a saved draft review from local state — never re-run the model,
+        // so viewing history stays free (and can't burn a plan unit).
+        reset();
+        setRecord(entry);
+        setAnalysis(entry.analysis);
+        isDraftRef.current = true;
+        draftMarkdownRef.current = entry.draftMarkdown;
+        sourceNameRef.current = entry.name;
+        setIsDraftState(true);
+        setDraftMarkdown(entry.draftMarkdown);
+        setDisplayName(entry.name);
+        const restoredPages = buildDraftPages(splitDraftIntoSections(entry.draftMarkdown));
+        setPages(restoredPages);
+        setContractText(await extractContractText(restoredPages));
+        setProgress(makeProgress('complete', 'Analysis complete'));
         return;
       }
       reset();
@@ -497,7 +513,7 @@ export function AnalysisProvider({ children }: AnalysisProviderProps) {
         setContractText(await extractContractText(entry.pageTexts));
       }
     },
-    [beginWithText, reset],
+    [reset],
   );
 
   const attachPdfToRecord = useCallback(
