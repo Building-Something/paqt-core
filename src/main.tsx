@@ -34,6 +34,34 @@ window.addEventListener('unhandledrejection', (event) => {
   console.error('[paqt][runtime]', detail);
 });
 
+/**
+ * Radix's modal layers lock the whole page with `body { pointer-events: none }`
+ * and restore it on unmount. If a layer goes away without restoring it (a route
+ * change mid-close-animation, a remount, StrictMode's double-invoke), every
+ * click in the app silently stops working until the page is reloaded — the UI
+ * still looks perfectly normal.
+ *
+ * Nothing should be locked while no layer is mounted, so drop a stale lock on
+ * the first pointer event. This runs in the capture phase because a
+ * `pointer-events: none` body can't be the event target itself — the event still
+ * reaches the window, which is the only reason the recovery is possible at all.
+ */
+const OPEN_LAYER_SELECTOR = '[data-radix-menu-content],[data-radix-popper-content-wrapper],[role="dialog"]';
+
+window.addEventListener(
+  'pointerdown',
+  () => {
+    if (document.body.style.pointerEvents !== 'none') {
+      return;
+    }
+    if (document.querySelector(OPEN_LAYER_SELECTOR)) {
+      return;
+    }
+    document.body.style.pointerEvents = '';
+  },
+  true,
+);
+
 const rootElement = document.getElementById('root');
 if (!rootElement) {
   throw new Error('Root element not found');

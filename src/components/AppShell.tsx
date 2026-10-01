@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate, Outlet } from 'react-router-dom';
 import { ChevronRight, FilePlus2, LogOut, Sparkles } from 'lucide-react';
 import { useAnalysis } from '../contexts/AnalysisContext';
@@ -30,6 +31,14 @@ function UserMenu() {
   const { user, signOut } = useAuth();
   const { reset } = useAnalysis();
   const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const [open, setOpen] = useState(false);
+
+  // Any navigation dismisses the menu, so a route change can never leave its
+  // layer behind on the screen being opened.
+  useEffect(() => {
+    setOpen(false);
+  }, [pathname]);
   const { toast } = useToast();
 
   const initial = (user?.email ?? '?').charAt(0).toUpperCase();
@@ -42,7 +51,14 @@ function UserMenu() {
   }
 
   return (
-    <DropdownMenu>
+    <DropdownMenu
+      open={open}
+      onOpenChange={setOpen}
+      // A two-item account menu needs no modal behaviour, and modal layers are
+      // what take a page-wide `pointer-events` lock. Staying non-modal means a
+      // missed unmount can never freeze clicks across the whole app.
+      modal={false}
+    >
       <DropdownMenuTrigger
         aria-label="Account menu"
         className="flex size-8 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary ring-offset-background transition-colors hover:bg-primary/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
