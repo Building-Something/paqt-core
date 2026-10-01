@@ -1,6 +1,5 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AnalysisProvider } from './contexts/AnalysisContext';
-import { SettingsProvider } from './contexts/SettingsContext';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { AuthProvider } from './contexts/AuthContext';
 import { EntitlementProvider } from './contexts/EntitlementContext';
@@ -29,9 +28,8 @@ export default function App() {
           <ToastProvider>
             <EntitlementProvider>
               <UpgradeProvider>
-                <SettingsProvider>
-                  <AnalysisProvider>
-                    <AppErrorBoundary>
+                <AnalysisProvider>
+                  <AppErrorBoundary>
                       <Routes>
                       <Route path="/" element={<LandingPage />} />
                       <Route path="/features" element={<FeaturesPage />} />
@@ -57,7 +55,6 @@ export default function App() {
                     </Routes>
                     </AppErrorBoundary>
                   </AnalysisProvider>
-                </SettingsProvider>
               </UpgradeProvider>
             </EntitlementProvider>
           </ToastProvider>

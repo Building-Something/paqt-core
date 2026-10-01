@@ -111,7 +111,6 @@ function UserCard() {
             {user?.email ?? 'Guest workspace'}
           </p>
           <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
-            <HealthBadge />
             <span className="text-[11px] text-muted-foreground/50">v1</span>
           </div>
         </div>

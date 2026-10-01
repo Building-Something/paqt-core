@@ -14,9 +14,8 @@ const GROQ_ENDPOINT = 'https://api.groq.com/openai/v1/chat/completions';
 const GROQ_MODEL = 'openai/gpt-oss-120b';
 const BODY_LIMIT = 20 * 1024 * 1024; // 20 MB
 const UPSTREAM_TIMEOUT_MS = 120_000; // 120 seconds
-const REASONING_EFFORT = 'low';
+const REASONING_EFFORT = 'medium';
 const INCLUDE_REASONING = false;
-const REASONING_LEVELS = ['low', 'medium', 'high'];
 
 const RATE_LIMIT_HEADERS = [
   'retry-after',
@@ -339,12 +338,9 @@ export async function groqProxyHandler(req, res) {
     }
   }
 
-  // Clamp to the model's supported set; fall back to the default for anything unknown.
-  const requestedEffort = body.reasoning_effort;
-  const reasoningEffort =
-    typeof requestedEffort === 'string' && REASONING_LEVELS.includes(requestedEffort)
-      ? requestedEffort
-      : REASONING_EFFORT;
+  // Reasoning effort is pinned to the default (medium): the product no longer
+  // exposes a choice, so always send the balanced profile upstream.
+  const reasoningEffort = REASONING_EFFORT;
 
   const upstreamBody = {
     model: GROQ_MODEL,
