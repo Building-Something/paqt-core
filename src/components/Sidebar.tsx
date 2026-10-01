@@ -10,10 +10,8 @@ import {
 } from 'lucide-react';
 import { useAnalysis } from '../contexts/AnalysisContext';
 import { useAuth } from '../contexts/AuthContext';
-import { useEntitlement } from '../contexts/EntitlementContext';
 import { useToast } from '../contexts/ToastContext';
 import { useServerHealth } from '../hooks/useServerHealth';
-import { isPlanActive, isPlanCanceling } from '../services/entitlementService';
 import { Button } from './ui/button';
 import { ThemeToggle } from './ThemeToggle';
 
@@ -80,48 +78,6 @@ const NAV_SECTIONS = [
   },
 ] as const;
 
-function PlanBadge() {
-  const { usage, loading } = useEntitlement();
-
-  if (loading || !usage.signedIn) {
-    return null;
-  }
-
-  if (!isPlanActive(usage)) {
-    return (
-      <Link
-        to="/pricing"
-        title="Choose a plan"
-        className="inline-flex items-center gap-1 rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:border-primary/30 hover:text-foreground"
-      >
-        No plan
-      </Link>
-    );
-  }
-
-  const canceling = isPlanCanceling(usage);
-  const date = new Date(usage.periodEnd ?? Date.now()).toLocaleDateString(undefined, {
-    day: 'numeric',
-    month: 'short',
-  });
-  const tone = canceling
-    ? 'bg-medium-500/15 text-medium-700 dark:bg-medium-500/15 dark:text-medium-500'
-    : 'bg-low-500/15 text-low-700 dark:bg-low-500/15 dark:text-low-500';
-  const dot = canceling ? 'bg-medium-500' : 'bg-low-500';
-
-  return (
-    <span
-      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${tone}`}
-      title={canceling ? `${usage.planName ?? 'Plan'} active until ${date}` : `${usage.planName ?? 'Plan'} · resets ${date}`}
-    >
-      <span className={`size-1.5 rounded-full ${dot}`} aria-hidden="true" />
-      {usage.planName ?? 'Plan'}
-      <span className="opacity-70">·</span>
-      <span className="tabular-nums">{canceling ? `until ${date}` : `resets ${date}`}</span>
-    </span>
-  );
-}
-
 function UserCard() {
   const { user, signOut } = useAuth();
   const { reset } = useAnalysis();
@@ -155,7 +111,6 @@ function UserCard() {
             {user?.email ?? 'Guest workspace'}
           </p>
           <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
-            <PlanBadge />
             <HealthBadge />
             <span className="text-[11px] text-muted-foreground/50">v1</span>
           </div>

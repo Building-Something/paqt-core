@@ -1,8 +1,10 @@
 import { Link, useLocation, useNavigate, Outlet } from 'react-router-dom';
-import { ChevronRight, FilePlus2, LogOut } from 'lucide-react';
+import { ChevronRight, FilePlus2, LogOut, Sparkles } from 'lucide-react';
 import { useAnalysis } from '../contexts/AnalysisContext';
 import { useAuth } from '../contexts/AuthContext';
+import { useEntitlement } from '../contexts/EntitlementContext';
 import { useToast } from '../contexts/ToastContext';
+import { isPlanActive, isPlanCanceling } from '../services/entitlementService';
 import { Button } from './ui/button';
 import { ThemeToggle } from './ThemeToggle';
 import { Sidebar } from './Sidebar';
@@ -66,6 +68,57 @@ function UserMenu() {
   );
 }
 
+function NavPlanBadge() {
+  const { usage, loading } = useEntitlement();
+
+  if (loading || !usage.signedIn) {
+    return null;
+  }
+
+  if (!isPlanActive(usage)) {
+    return (
+      <Link
+        to="/pricing"
+        title="Choose a plan"
+        className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-primary/40 bg-primary/5 px-2.5 py-1 text-xs font-semibold text-primary transition-colors hover:bg-primary/10"
+      >
+        <Sparkles className="size-3.5" aria-hidden="true" />
+        Choose plan
+      </Link>
+    );
+  }
+
+  const canceling = isPlanCanceling(usage);
+  const date = new Date(usage.periodEnd ?? Date.now()).toLocaleDateString(undefined, {
+    day: 'numeric',
+    month: 'short',
+  });
+  const tone = canceling
+    ? 'border-medium-500/30 bg-medium-500/10 text-medium-700 dark:border-medium-500/25 dark:text-medium-500'
+    : 'border-low-500/30 bg-low-500/10 text-low-700 dark:border-low-500/25 dark:text-low-500';
+  const dot = canceling ? 'bg-medium-500' : 'bg-low-500';
+
+  return (
+    <Link
+      to="/pricing"
+      title={
+        canceling
+          ? `${usage.planName ?? 'Plan'} active until ${date}`
+          : `${usage.planName ?? 'Plan'} · resets ${date}`
+      }
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium shadow-sm backdrop-blur transition-colors hover:brightness-110 ${tone}`}
+    >
+      <Sparkles className="size-3.5" aria-hidden="true" />
+      <span className={`size-1.5 rounded-full ${dot}`} aria-hidden="true" />
+      <span className="font-semibold">{usage.planName ?? 'Plan'}</span>
+      <span className="opacity-60" aria-hidden="true">
+        ·
+      </span>
+      <span className="tabular-nums opacity-90">{canceling ? `until ${date}` : `resets ${date}`}</span>
+    </Link>
+  );
+}
+
 function TopBar() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -92,6 +145,7 @@ function TopBar() {
         <span className="font-medium text-foreground">{title}</span>
       </div>
       <div className="ml-auto flex items-center gap-3">
+        <NavPlanBadge />
         <ThemeToggle />
         <Button size="sm" onClick={handleNewAnalysis}>
           <FilePlus2 className="size-4" aria-hidden="true" />
