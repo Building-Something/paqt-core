@@ -16,6 +16,8 @@ export interface RpcCall {
 
 export interface FakeDb {
   plans: PlanRow[];
+  /** `plan_prices` catalogue rows: one per (plan, provider, interval). */
+  planPrices: Record<string, any>[];
   rpcCalls: RpcCall[];
   /** Returned by `admin.rpc(name)`; a function is called with the args. */
   rpcResults: Record<string, unknown>;
@@ -32,6 +34,7 @@ export interface FakeDb {
 export function createFakeDb(overrides: Partial<FakeDb> = {}): FakeDb {
   return {
     plans: [],
+    planPrices: [],
     rpcCalls: [],
     rpcResults: {},
     rpcErrors: {},
@@ -70,7 +73,17 @@ const BOOLEAN_RPCS = new Set(['paqt_claim_billing', 'paqt_claim_webhook_event'])
 const ROWSET_RPCS = new Set(['paqt_sweep_abandoned_subscriptions', 'paqt_sweep_stale_claims']);
 
 export function createFakeAdmin(db: FakeDb): any {
-  function resolve(result: { data?: unknown; error?: { message: string } | null }) {
+  // Tables the fake can answer a `select` for. Anything else resolves to no rows,
+  // which is what PostgREST does for an empty table.
+  const TABLE_ROWS: Record<string, () => Row[]> = {
+    plans: () => db.plans as unknown as Row[],
+    plan_prices: () => db.planPrices,
+  };
+
+  // `code` is part of the shape because PostgREST reports a unique violation as
+  // `23505`, and the billing code detects the one-live-per-user conflict from that
+  // code rather than from the English message.
+  function resolve(result: { data?: unknown; error?: { message: string; code?: string } | null }) {
     return Promise.resolve({ data: result.data ?? null, error: result.error ?? null });
   }
 
@@ -82,16 +95,20 @@ export function createFakeAdmin(db: FakeDb): any {
       // linker relies on, so every builder carries the write verbs.
       update: (values: Row) => builder(table, 'update', values),
       upsert: (values: Row) => builder(table, 'upsert', values),
+      // `limit` narrows a list query; every `maybeSingle` here is already
+      // single-row, so it only has to exist and stay chainable.
+      limit: () => api,
       eq: (column: string, value: unknown) => {
         filters[column] = value;
         return api;
       },
       maybeSingle: () => {
-        if (table !== 'plans') {
+        const rows = TABLE_ROWS[table]?.();
+        if (!rows) {
           return resolve({ data: null });
         }
-        const match = db.plans.find((plan) =>
-          Object.entries(filters).every(([column, value]) => (plan as Row)[column] === value),
+        const match = rows.find((row) =>
+          Object.entries(filters).every(([column, value]) => row[column] === value),
         );
         return resolve({ data: match ?? null });
       },
@@ -268,6 +285,110 @@ export function installFailingRazorpay(status = 500, code = 'SERVER_ERROR'): Raz
         body: init.body ? JSON.parse(String(init.body)) : undefined,
       });
       return new Response(JSON.stringify({ error: { code, description: 'boom' } }), { status });
+    }),
+  );
+  return harness;
+}
+
+export interface PolarScript {
+  /** Served from `GET /subscriptions/`, filtered by `external_customer_id`. */
+  subscriptions?: unknown[];
+  /** Keyed by subscription id. */
+  byId?: Record<string, unknown>;
+  /**
+   * Keyed by subscription id, the state returned by a write. Defaults to `byId`.
+   * `cancel_at_period_end` has to be scripted as *confirmed* for the adapter to
+   * believe the cancellation, so tests script the before/after pair.
+   */
+  patched?: Record<string, unknown>;
+  /** Returned by `POST /checkouts/`, i.e. a new hosted checkout. */
+  createdCheckout?: unknown;
+  /** Ids that should answer 404, e.g. deleted upstream. */
+  missing?: string[];
+}
+
+/** Every HTTP call the code under test made to Polar. */
+export interface PolarHarness {
+  calls: { method: string; url: string; body: unknown }[];
+}
+
+/**
+ * Installs a `fetch` that speaks just enough Polar for the billing code: the
+ * subscription list, single-subscription fetch, the `PATCH` updates, and the
+ * `DELETE` that revokes.
+ */
+export function installPolar(script: PolarScript): PolarHarness {
+  const harness: PolarHarness = { calls: [] };
+  const byId = script.byId ?? {};
+
+  const json = (status: number, body: unknown) =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+  const notFound = () =>
+    json(404, { type: 'ResourceNotFound', title: 'Not Found', status: 404, detail: 'not found' });
+
+  const mock = vi.fn(async (input: any, init: RequestInit = {}) => {
+    const url = String(input);
+    const method = (init.method ?? 'GET').toUpperCase();
+    const body = init.body ? JSON.parse(String(init.body)) : undefined;
+    harness.calls.push({ method, url, body });
+
+    if (method === 'POST' && /\/checkouts\/?$/.test(url)) {
+      const created = script.createdCheckout;
+      if (!created) {
+        return json(422, { type: 'ValidationError', detail: 'unmocked POST checkouts' });
+      }
+      return json(201, created);
+    }
+
+    if (method === 'GET' && /\/subscriptions\/?(\?|$)/.test(url)) {
+      // Paqt's user id is Polar's `external_customer_id`, so the filter the
+      // adapter sends is what keeps one account's subscriptions out of another's.
+      const externalCustomerId = new URL(url).searchParams.get('external_customer_id');
+      const items = (script.subscriptions ?? []).filter(
+        (sub: any) => !externalCustomerId || sub?.customer?.external_id === externalCustomerId,
+      );
+      return json(200, { items, page: 1, total_items: items.length });
+    }
+
+    const single = /\/subscriptions\/([^/?]+)$/.exec(url);
+    if (single) {
+      const id = decodeURIComponent(single[1]);
+      if (script.missing?.includes(id)) {
+        return notFound();
+      }
+      if (method === 'DELETE') {
+        return json(200, byId[id] ?? { id });
+      }
+      const sub = method === 'PATCH' ? (script.patched?.[id] ?? byId[id]) : byId[id];
+      if (!sub) {
+        return notFound();
+      }
+      return json(200, sub);
+    }
+
+    return json(404, { type: 'ResourceNotFound', detail: `unmocked ${method} ${url}` });
+  });
+
+  vi.stubGlobal('fetch', mock);
+  return harness;
+}
+
+/** Installs a Polar fetch that always fails, to exercise outage handling. */
+export function installFailingPolar(status = 500): PolarHarness {
+  const harness: PolarHarness = { calls: [] };
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: any, init: RequestInit = {}) => {
+      harness.calls.push({
+        method: (init.method ?? 'GET').toUpperCase(),
+        url: String(input),
+        body: init.body ? JSON.parse(String(init.body)) : undefined,
+      });
+      return new Response(JSON.stringify({ type: 'ServerError', detail: 'boom' }), { status });
     }),
   );
   return harness;

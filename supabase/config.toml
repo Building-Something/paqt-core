@@ -393,6 +393,16 @@ verify_jwt = true
 [functions.subscription-manage]
 verify_jwt = true
 
+[functions.create-polar-checkout]
+verify_jwt = true
+
+# Polar cannot present a Supabase JWT. Its authenticity comes from the signed
+# body instead, which this handler verifies before doing anything. Leaving the
+# default `true` would make every delivery 401 at the gateway and Polar would
+# keep retrying a request that can never succeed.
+[functions.polar-webhook]
+verify_jwt = false
+
 # [edge_runtime.secrets]
 # secret_key = "env(SECRET_VALUE)"
 

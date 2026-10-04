@@ -216,6 +216,18 @@ export interface RazorpayCheckout {
   subscriptionId: string;
   name: string | null;
   email: string | null;
+  /**
+   * Set when the provider runs the purchase on a hosted page instead of a modal,
+   * which is how Polar works. The caller must navigate to `url`; nothing is
+   * collected until the customer completes it there.
+   */
+  redirect?: boolean;
+  /** Hosted checkout page to navigate to, when `redirect` is true. */
+  url?: string | null;
+  checkoutId?: string | null;
+  /** Minor-unit amount, so the UI can confirm what is about to be charged. */
+  amount?: number | null;
+  currency?: string | null;
   /** True when the checkout renewed/upgraded an existing subscription (no payment modal). */
   switched?: boolean;
   /**
@@ -239,7 +251,7 @@ export interface RazorpayCheckout {
   startsAt?: number | null;
 }
 
-export type CheckoutOutcome = 'completed' | 'dismissed' | 'reconciled' | 'scheduled';
+export type CheckoutOutcome = 'completed' | 'dismissed' | 'reconciled' | 'scheduled' | 'redirected';
 
 export interface SubscriptionInfo {
   hasSubscription: boolean;
@@ -399,6 +411,75 @@ export async function beginCheckout(
   planId: string,
   options: { paymentMethod?: 'same' | 'new'; confirmReplacingPaidPeriod?: boolean } = {},
 ): Promise<RazorpayCheckout> {
+  return billingProvider() === 'polar'
+    ? beginPolarCheckout(planId)
+    : beginRazorpayCheckout(planId, options);
+}
+
+/**
+ * Which billing provider the frontend talks to.
+ *
+ * Read from a `VITE_` variable because it is baked into the bundle at build time,
+ * so it must not be the secret `BILLING_PROVIDER` the Edge Functions use. The two
+ * have to agree: if the bundle says `polar` while the functions still say
+ * `razorpay`, the checkout endpoint refuses the call rather than charging through
+ * the wrong provider.
+ *
+ * Read per call rather than once at import so a test can pin the provider, and so
+ * the value can never be captured before the environment is populated.
+ */
+function billingProvider(): 'polar' | 'razorpay' {
+  const raw = (import.meta.env.VITE_BILLING_PROVIDER as string | undefined) ?? 'polar';
+  return raw.trim().toLowerCase() === 'razorpay' ? 'razorpay' : 'polar';
+}
+
+/**
+ * Starts a Polar checkout.
+ *
+ * Polar owns the whole purchase on a hosted page, so this creates the checkout
+ * session and hands back a URL to navigate to. Nothing is written locally here —
+ * the webhook does that once money actually moves, so an abandoned checkout never
+ * grants access.
+ */
+async function beginPolarCheckout(planId: string): Promise<RazorpayCheckout> {
+  let body: Record<string, unknown>;
+  try {
+    body = await callBillingEdge('create-polar-checkout', {
+      plan_id: planId,
+      idempotency_key: checkoutIdempotencyKey(),
+    });
+  } catch (err) {
+    if (!(err as CheckoutError)?.ambiguous) {
+      resetCheckoutIdempotencyKey();
+    }
+    throw err;
+  }
+  if (typeof body.url !== 'string' || !body.url) {
+    throw {
+      code: 'checkout_failed',
+      message: 'Could not start checkout. The billing service may not be configured yet.',
+    } satisfies CheckoutError;
+  }
+  // A Polar checkout is keyed by its checkout id rather than a subscription id, so
+  // the field is filled with that id to keep one shape for callers.
+  return {
+    key: '',
+    subscriptionId: '',
+    name: typeof body.name === 'string' ? body.name : null,
+    email: typeof body.email === 'string' ? body.email : null,
+    redirect: body.redirect === true,
+    url: body.url,
+    checkoutId: typeof body.checkout_id === 'string' ? body.checkout_id : null,
+    amount: typeof body.amount === 'number' ? body.amount : null,
+    currency: typeof body.currency === 'string' ? body.currency : null,
+    planId: typeof body.plan_id === 'string' ? body.plan_id : null,
+  };
+}
+
+async function beginRazorpayCheckout(
+  planId: string,
+  options: { paymentMethod?: 'same' | 'new'; confirmReplacingPaidPeriod?: boolean },
+): Promise<RazorpayCheckout> {
   let body: Record<string, unknown>;
   try {
     body = await callBillingEdge('create-checkout-session', {
@@ -517,6 +598,16 @@ function loadRazorpayScript(): Promise<void> {
 export async function openRazorpayCheckout(
   checkout: RazorpayCheckout,
 ): Promise<CheckoutOutcome> {
+// Polar runs the purchase on its own hosted page, so there is nothing to open
+  // in an iframe or a modal — the browser has to leave for `url` and come back
+  // when the customer is done. Handled here so every call site works unchanged.
+  if (checkout.redirect && checkout.url) {
+    resetCheckoutIdempotencyKey();
+    if (typeof window !== 'undefined') {
+      window.location.assign(checkout.url);
+    }
+    return 'redirected';
+  }
   if (checkout.switched) {
     // Nothing was collected: either the plan change is scheduled for the next
     // cycle, the new plan starts when an already-paid period ends, or the account
@@ -689,10 +780,34 @@ export function scheduledChangeMessage(checkout: RazorpayCheckout): string {
   return `Plan change to ${to} is scheduled${on}. Nothing is charged until then, and you keep your current plan until it applies.`;
 }
 
+/**
+ * Currency every new purchase is charged in.
+ *
+ * A single constant because the amount, the currency and the code the customer
+ * sees all have to agree; Polar bills in USD and these are what its products are
+ * priced at. Anything still holding an INR amount is a legacy Razorpay row.
+ */
+export const PLAN_CURRENCY = 'USD';
+
+/**
+ * Formats a plan price for display.
+ *
+ * Takes major units (39, not 3900) because that is how the catalogue stores what
+ * the customer is quoted; the minor-unit conversion belongs to the provider API.
+ */
+export function formatPlanPrice(amount: number, currency: string = PLAN_CURRENCY): string {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency,
+    minimumFractionDigits: Number.isInteger(amount) ? 0 : 2,
+  }).format(amount);
+}
+
 export const PLANS = [  {
     id: 'individual',
     name: 'Individual',
-    price: 2999,
+    price: 39,
+    currency: PLAN_CURRENCY,
     tagline: 'For individuals reviewing their own contracts.',
     analysisQuota: 5,
     draftQuota: 5,
@@ -709,7 +824,8 @@ export const PLANS = [  {
   {
     id: 'pro',
     name: 'Pro',
-    price: 5999,
+    price: 59,
+    currency: PLAN_CURRENCY,
     tagline: 'For freelancers and founders who work with contracts weekly.',
     analysisQuota: 15,
     draftQuota: 15,

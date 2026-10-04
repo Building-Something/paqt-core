@@ -1,4 +1,6 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
+import type { PaqtStatus } from './providers/domain.ts';
+import { isLiveStatus, isTerminalStatus } from './providers/domain.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? '';
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
@@ -148,18 +150,6 @@ export interface RazorpayCustomer {
   notes?: Record<string, string> | null;
 }
 
-/** Paqt's normalized subscription status (mirrors the DB check constraint). */
-export type PaqtStatus =
-  | 'authenticating'
-  | 'active'
-  | 'canceling'
-  | 'past_due'
-  | 'paused'
-  | 'expired'
-  | 'canceled'
-  | 'completed'
-  | 'failed';
-
 /**
  * Razorpay status -> Paqt status.
  *
@@ -200,18 +190,14 @@ export function mapRazorpayStatus(raw: string | null | undefined): PaqtStatus {
   }
 }
 
-/** Statuses that hold a row in the "one live subscription per user" index. */
-const LIVE_STATUSES = new Set<PaqtStatus>([
-  'authenticating',
-  'active',
-  'canceling',
-  'past_due',
-  'paused',
-]);
-
-export function isLiveStatus(status: string | null | undefined): boolean {
-  return LIVE_STATUSES.has((status ?? '') as PaqtStatus);
-}
+/**
+ * The normalized status vocabulary lives in `providers/domain.ts` so every
+ * provider maps into one shared set. Re-exported here because the billing
+ * functions and their tests import it from this module.
+ */
+export { isLiveStatus };
+export { isTerminalStatus };
+export type { PaqtStatus };
 
 /**
  * Raw provider statuses that Razorpay only ever reaches after a charge.

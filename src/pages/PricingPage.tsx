@@ -92,6 +92,7 @@ export function PricingPage() {
       if (outcome === 'completed') {
         window.location.assign('/settings?checkout=success');
       }
+      // For redirect flows (e.g. Polar), navigation happens in openRazorpayCheckout.
     } catch (caught) {
       if (isPaidPeriodReplacement(caught)) {
         setPendingPaidPeriod({ planId, message: caught.message });
@@ -157,6 +158,7 @@ export function PricingPage() {
                 key={plan.id}
                 name={plan.name}
                 price={plan.price}
+                currency={plan.currency}
                 tagline={plan.tagline}
                 features={plan.features}
                 cta={plan.cta}

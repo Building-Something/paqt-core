@@ -23,6 +23,7 @@ import {
   listSubscriptions,
   mapRazorpayStatus,
   resume as resumeSubscription,
+  type Admin,
   type RazorpaySubscription,
 } from '../_shared/razorpay.ts';
 import {
@@ -33,6 +34,16 @@ import {
   syncEntitlement,
   type BillingState,
 } from '../_shared/billing.ts';
+import { isPolarActive, polarProviderOrThrow, providerConfigured, ProviderError } from '../_shared/providers/index.ts';
+import { applyNormalizedSubscription } from '../_shared/providers/apply.ts';
+import {
+  hasPaidPeriod as hasPaidPeriodNormalized,
+  isLiveStatus as isLiveStatusNormalized,
+  isTerminalStatus,
+  mapPolarStatus,
+  polarHasBeenCharged,
+} from '../_shared/providers/domain.ts';
+import type { BillingSubscription } from '../_shared/providers/types.ts';
 
 interface ManageRequest {
   action?: unknown;
@@ -48,14 +59,22 @@ interface ManageRequest {
  * live subscription left at Razorpay to undo a cancellation on.
  */
 function providerEndedWithHeldPeriod(state: BillingState | null): boolean {
-  return (
-    state !== null &&
-    state.status === 'canceling' &&
-    state.cancel_at_period_end === true &&
-    isProviderEnded(state.razorpay_status) &&
-    typeof state.period_end === 'number' &&
-    state.period_end > Date.now()
-  );
+  if (
+    state === null ||
+    state.status !== 'canceling' ||
+    state.cancel_at_period_end !== true ||
+    typeof state.period_end !== 'number' ||
+    state.period_end <= Date.now()
+  ) {
+    return false;
+  }
+  const raw = state.provider_status ?? state.razorpay_status;
+  if (raw === null || raw === undefined) {
+    return false;
+  }
+  // "Provider ended" is a provider-specific claim, so it has to be read through
+  // the active provider's vocabulary rather than one provider's status list.
+  return isPolarActive() ? isTerminalStatus(mapPolarStatus(raw)) : isProviderEnded(raw);
 }
 
 /**
@@ -227,6 +246,219 @@ async function purgeAllSubscriptions(
   return failed;
 }
 
+/**
+ * Provider-neutral ids, preferring the provider-neutral keys and falling back to
+ * the Razorpay-named ones.
+ *
+ * The fallbacks are not defensive padding: a deployment mid-migration can hold
+ * rows written by either provider, and `paqt_billing_state` returns both
+ * spellings for exactly this reason.
+ */
+function providerIds(state: BillingState | null): { subscriptionId: string | null; customerId: string | null } {
+  return {
+    subscriptionId:
+      state?.provider_subscription_id ?? state?.last_provider_subscription_id ?? state?.razorpay_subscription_id ?? null,
+    customerId: state?.provider_customer_id ?? state?.last_provider_customer_id ?? state?.razorpay_customer_id ?? null,
+  };
+}
+
+/** The same client contract as {@link clientView}, plus which provider answered. */
+function polarView(state: BillingState | null, extra: Record<string, unknown> = {}): Record<string, unknown> {
+  const { subscriptionId } = providerIds(state);
+  return {
+    has_subscription: state?.has_subscription ?? false,
+    status: state?.status ?? 'none',
+    billing_status: state?.billing_status ?? null,
+    plan_id: state?.plan_id ?? null,
+    plan_name: state?.plan_name ?? null,
+    period_start: state?.period_start ?? null,
+    period_end: state?.period_end ?? null,
+    subscription_id: subscriptionId,
+    provider: 'polar',
+    // Polar has no equivalent of Razorpay's raw status field name; the generic
+    // key carries it so the UI can still tell "we ended it" from "they did".
+    provider_status: state?.provider_status ?? state?.razorpay_status ?? null,
+    cancel_at_period_end: state?.cancel_at_period_end ?? false,
+    cancels_at_period_end: state?.cancel_at_period_end ?? false,
+    pending_plan_id: state?.pending_plan_id ?? null,
+    pending_plan_name: state?.pending_plan_name ?? null,
+    pending_change_at: state?.pending_change_at ?? null,
+    pending_change_kind: state?.pending_change_kind ?? null,
+    provider_ended: providerEndedWithHeldPeriod(state),
+    ...extra,
+  };
+}
+
+/**
+ * The provider subscription this action applies to.
+ *
+ * The tracked id is tried first because it is the one Paqt wrote; the Polar-side
+ * listing is the fallback for when that row is stale or the id was never recorded
+ * (a subscription adopted after an abandoned checkout).
+ */
+async function resolvePolarSubscription(
+  userId: string,
+  state: BillingState | null,
+): Promise<BillingSubscription | null> {
+  const provider = polarProviderOrThrow();
+  const { subscriptionId } = providerIds(state);
+  if (subscriptionId) {
+    try {
+      const sub = await provider.fetchSubscription(subscriptionId);
+      if (isLiveStatusNormalized(mapPolarStatus(sub.status))) {
+        return sub;
+      }
+    } catch (err) {
+      // Only "this subscription is gone" may fall through to the account-wide
+      // lookup. Any other failure -- a bad token, a timeout, Polar down -- is an
+      // unknown, not an absence, and must not be reported to the customer as
+      // "you have no subscription" while their plan is very much still running.
+      if (!(err instanceof ProviderError) || err.status !== 404) {
+        throw err;
+      }
+    }
+  }
+  const items = await provider.listSubscriptions(null, userId);
+  return items.find((sub) => isLiveStatusNormalized(mapPolarStatus(sub.status))) ?? null;
+}
+
+/** True when Polar has already closed the subscription, so cancelling is moot. */
+function isPolarAlreadyGone(err: unknown): boolean {
+  return err instanceof ProviderError && (err.status === 400 || err.status === 404 || err.status === 409);
+}
+
+/**
+ * The Polar half of subscription management.
+ *
+ * Mirrors the Razorpay flow action for action so the client cannot tell which
+ * provider it is talking to, with two deliberate differences:
+ *
+ *   * Polar can always schedule an end-of-period cancellation, so there is no
+ *     deferred-cancel fallback to reach for. When it refuses, that is an error
+ *     worth surfacing rather than silently downgrading to an immediate revoke.
+ *   * Polar cannot pause through this adapter, so "resume" only ever undoes a
+ *     scheduled cancellation.
+ */
+async function handlePolar(
+  admin: Admin,
+  req: Request,
+  userId: string,
+  action: 'cancel' | 'resume' | 'status' | 'purge_all',
+  state: BillingState | null,
+): Promise<Response> {
+  const provider = polarProviderOrThrow();
+
+  if (action === 'status') {
+    // Same healing intent as the Razorpay path: a checkout that was completed but
+    // whose webhook never landed leaves the mirror stuck short of a paid period.
+    if (state && !provablyPaid(state)) {
+      const { subscriptionId } = providerIds(state);
+      if (subscriptionId) {
+        const sub = await provider.fetchSubscription(subscriptionId).catch(() => null);
+        if (sub && polarHasBeenCharged(sub.providerStatus)) {
+          await applyNormalizedSubscription(admin, { sub, userId });
+          return jsonBody(polarView(await getBillingState(admin, userId), { reconciled: true }), req);
+        }
+      }
+    }
+    return jsonBody(polarView(state), req);
+  }
+
+  if (action === 'purge_all') {
+    const items = await provider.listSubscriptions(null, userId);
+    const failed: string[] = [];
+    let purged = 0;
+    for (const sub of items) {
+      if (!isLiveStatusNormalized(mapPolarStatus(sub.status))) {
+        continue;
+      }
+      try {
+        const cancelled = await provider.cancelNow(sub.id);
+        await applyNormalizedSubscription(admin, {
+          sub: cancelled,
+          userId,
+          overrideStatus: 'canceled',
+          terminal: true,
+        });
+        purged += 1;
+      } catch (err) {
+        if (isPolarAlreadyGone(err)) {
+          continue;
+        }
+        console.error(`[subscription-manage] could not cancel ${sub.id} on account deletion:`, (err as Error)?.message);
+        failed.push(sub.id);
+      }
+    }
+    return jsonBody(
+      polarView(await getBillingState(admin, userId), {
+        cancelled: true,
+        purged,
+        failed: failed.length,
+        failed_subscription_ids: failed,
+        canceled_immediately: true,
+      }),
+      req,
+    );
+  }
+
+  const live = await resolvePolarSubscription(userId, state);
+  if (!live?.id) {
+    if (providerEndedWithHeldPeriod(state)) {
+      const on = new Date(state!.period_end!).toLocaleDateString('en-US', {
+        day: 'numeric',
+        month: 'short',
+      });
+      throw new HttpError(
+        409,
+        'provider_ended_period_held',
+        `Your ${state?.plan_name ?? 'plan'} stays active until ${on}, but it will not renew: the payment provider has closed the subscription. Choose a plan to start a new one.`,
+        { period_end: state?.period_end ?? null, plan_id: state?.plan_id ?? null },
+      );
+    }
+    throw new HttpError(
+      409,
+      'no_subscription',
+      action === 'cancel'
+        ? 'You have no active subscription to cancel.'
+        : 'Your subscription was cancelled at the payment provider. Choose a plan to subscribe again.',
+    );
+  }
+
+  if (action === 'cancel') {
+    if (live.cancelAtPeriodEnd === true) {
+      return jsonBody(polarView(state, { cancelled: true, already_scheduled: true }), req);
+    }
+    if (polarHasBeenCharged(live.providerStatus) && hasPaidPeriodNormalized(live)) {
+      // Polar confirms `cancel_at_period_end` in its response and the adapter
+      // throws rather than returning an unconfirmed flag, so reaching here means
+      // the renewal really is stopped while access runs to period end.
+      const cancelled = await provider.cancelAtPeriodEnd(live.id);
+      await applyNormalizedSubscription(admin, { sub: cancelled, userId, terminal: true });
+      return jsonBody(
+        polarView(await getBillingState(admin, userId), { cancelled: true, canceled_immediately: false }),
+        req,
+      );
+    }
+    // Never charged, so there is no paid period to protect: stop it now.
+    const cancelled = await provider.cancelNow(live.id);
+    await applyNormalizedSubscription(admin, { sub: cancelled, userId, overrideStatus: 'canceled', terminal: true });
+    return jsonBody(
+      polarView(await getBillingState(admin, userId), { cancelled: true, canceled_immediately: true }),
+      req,
+    );
+  }
+
+  // action === 'resume'
+  let changed = false;
+  if (live.cancelAtPeriodEnd === true) {
+    await provider.undoScheduledCancel(live.id);
+    changed = true;
+  }
+  const fresh = await provider.fetchSubscription(live.id).catch(() => live);
+  await applyNormalizedSubscription(admin, { sub: fresh, userId });
+  return jsonBody(polarView(await getBillingState(admin, userId), { resumed: changed }), req);
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return preflight(req);
@@ -249,6 +481,23 @@ Deno.serve(async (req) => {
     await syncEntitlement(admin, user.id);
     let state = await getBillingState(admin, user.id);
     let reconciled = false;
+
+    // Provider dispatch happens after auth and the entitlement sync, so both
+    // providers get the same authoritative starting state, and before any
+    // provider-specific read, so nothing below can reach for the wrong API.
+    if (isPolarActive()) {
+      if (!providerConfigured()) {
+        return jsonError(
+          503,
+          'billing_not_configured',
+          'Billing is temporarily unavailable. Please try again shortly.',
+          req,
+        );
+      }
+      // Awaited rather than returned: the catch below is what turns a provider or
+      // state failure into a reply, and a returned promise would reject past it.
+      return await handlePolar(admin, req, user.id, action, state);
+    }
 
     // A missed webhook would otherwise show a paying customer as having no plan
     // in the one screen they are told to fix their billing, so heal it here. The
@@ -442,6 +691,25 @@ Deno.serve(async (req) => {
         misconfigured
           ? 'Payments are temporarily unavailable. Please try again shortly.'
           : 'The payment provider is unavailable right now. Please try again shortly.',
+        req,
+      );
+    }
+    if (err instanceof ProviderError) {
+      // Logged with the provider's own detail; only the classification is shared.
+      console.error(`[subscription-manage] ${err.provider} ${err.code} (${err.status}):`, err.detail);
+      const misconfigured = err.status === 401 || err.status === 403;
+      // `cancel_not_confirmed` is the one provider code the client acts on: it
+      // means the provider accepted the request and changed nothing, so the card
+      // may still be armed. Everything else is flattened into a retryable outage.
+      const actionable = err.code === 'cancel_not_confirmed';
+      return jsonError(
+        502,
+        actionable ? err.code : misconfigured ? 'billing_not_configured' : 'payment_provider_error',
+        actionable
+          ? 'We could not confirm your cancellation. Please try again, and check that your payment method is still valid.'
+          : misconfigured
+            ? 'Payments are temporarily unavailable. Please try again shortly.'
+            : 'The payment provider is unavailable right now. Please try again shortly.',
         req,
       );
     }

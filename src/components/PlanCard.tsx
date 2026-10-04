@@ -1,10 +1,12 @@
 import { Check, ArrowUpRight, Loader2, BadgeCheck } from 'lucide-react';
 import { Button } from './ui/button';
 import { Card } from './ui/card';
+import { formatPlanPrice } from '../services/entitlementService';
 
 export function PlanCard({
   name,
   price,
+  currency,
   tagline,
   features,
   cta,
@@ -16,6 +18,7 @@ export function PlanCard({
 }: {
   name: string;
   price?: number;
+  currency?: string;
   tagline: string;
   features: readonly string[];
   cta: string;
@@ -38,7 +41,7 @@ export function PlanCard({
           </p>
           {price !== undefined ? (
             <p className="text-2xl font-semibold tracking-tight text-foreground">
-              ₹{price.toLocaleString('en-IN')}
+              {formatPlanPrice(price, currency)}
               <span className="text-xs font-normal text-muted-foreground">/month</span>
             </p>
           ) : (

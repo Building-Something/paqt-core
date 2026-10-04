@@ -12,7 +12,8 @@ import {
   pendingChangeMessage,
   reconciledMessage,
   scheduledChangeMessage,
-  resumeSubscription,
+resumeSubscription,
+  formatPlanPrice,
   PLANS,
   canRun,
   isPlanActive,
@@ -509,7 +510,7 @@ export function PlanUsageCard({ compact = false }: { compact?: boolean }) {
                   onClick={() => void handleCheckout(plan.id, samePlan ? 'new' : 'same')}
                 >
                   {busy === plan.id ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : null}
-                  {samePlan ? 'Renew' : plan.name} · ₹{plan.price.toLocaleString('en-IN')}
+                  {samePlan ? 'Renew' : plan.name} · {formatPlanPrice(plan.price, plan.currency)}
                   <ArrowUpRight className="size-3.5" aria-hidden="true" />
                 </Button>
               );

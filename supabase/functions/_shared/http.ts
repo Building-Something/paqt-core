@@ -68,7 +68,12 @@ function allowedOrigin(origin: string): string | null {
   if (LOCAL_ORIGIN.test(origin)) {
     return origin;
   }
-  const list = (process.env.APP_ORIGIN_ALLOW_LIST ?? process.env.APP_URL ?? '')
+  const envList =
+    (typeof Deno !== 'undefined' && (Deno.env.get('APP_ORIGIN_ALLOW_LIST') ?? Deno.env.get('APP_URL'))) ??
+    (typeof process !== 'undefined' && ((process.env as any)?.APP_ORIGIN_ALLOW_LIST ?? (process.env as any)?.APP_URL)) ??
+    '';
+  const list = envList
+    .trim()
     .split(',')
     .map((entry) => entry.trim())
     .filter(Boolean);
@@ -76,6 +81,19 @@ function allowedOrigin(origin: string): string | null {
     return list.includes(origin) ? origin : null;
   }
   return ALLOWED_ORIGIN_SUFFIXES.some((suffix) => origin.endsWith(suffix)) ? origin : null;
+}
+
+/**
+ * Whether a browser origin may be reflected back, per the same allow-list CORS uses.
+ *
+ * Exported because "is this origin ours?" has to be answered before an origin is
+ * used to build a URL we then hand to a third party. CORS cannot enforce that on
+ * its own: it only decides whether to *return* the origin in a response header, and
+ * a non-browser caller can omit or forge the header entirely. Checking the same
+ * list explicitly is what makes an origin safe to embed in a redirect target.
+ */
+export function isAllowedOrigin(origin: string): boolean {
+  return allowedOrigin(origin) !== null;
 }
 
 export function jsonError(

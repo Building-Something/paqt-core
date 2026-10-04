@@ -18,6 +18,12 @@ export const edgeEnv: EdgeEnv = {
   RAZORPAY_KEY_ID: 'rzp_test_key_id',
   RAZORPAY_KEY_SECRET: 'rzp_test_key_secret',
   RAZORPAY_WEBHOOK_SECRET: 'webhook_test_secret',
+  POLAR_ACCESS_TOKEN: 'polar_test_oat',
+  // Must be `whsec_` followed by VALID base64: the adapter base64-decodes the
+  // suffix to get the HMAC key, and `atob` throws on anything outside the alphabet
+  // (notably `_`), which would make every signature verification fail.
+  POLAR_WEBHOOK_SECRET: 'whsec_dGVzdC1zaWduaW5nLWtleS1tYXRlcmlhbA==',
+  POLAR_ENVIRONMENT: 'sandbox',
   APP_URL: 'https://app.test',
 };
 

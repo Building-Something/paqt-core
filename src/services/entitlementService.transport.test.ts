@@ -11,6 +11,7 @@ import {
   beginCheckout,
   manageSubscription,
   cancelSubscription,
+  openRazorpayCheckout,
   resumeSubscription,
   resetCheckoutIdempotencyKey,
 } from './entitlementService';
@@ -46,6 +47,10 @@ beforeEach(() => {
   getSession.mockResolvedValue({ data: { session } });
   fetchMock = vi.fn().mockResolvedValue(jsonResponse(OK_SUBSCRIPTION));
   vi.stubGlobal('fetch', fetchMock);
+  // These tests describe the Razorpay wire format, so the provider is pinned
+  // rather than inherited from whatever the developer's environment happens to
+  // say. The Polar equivalents are covered in their own block below.
+  vi.stubEnv('VITE_BILLING_PROVIDER', 'razorpay');
 });
 
 afterEach(() => {
@@ -300,5 +305,88 @@ describe('error responses', () => {
     } as unknown as Response);
 
     expect(await errorCode(manageSubscription())).toBe('billing_failed');
+  });
+});
+
+describe('polar checkout', () => {
+  beforeEach(() => {
+    vi.stubEnv('VITE_BILLING_PROVIDER', 'polar');
+  });
+
+  it('calls the polar endpoint instead of the razorpay one', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({ redirect: true, url: 'https://polar.sh/checkout/abc', checkout_id: 'co_1' }),
+    );
+
+    await beginCheckout('pro');
+
+    expect(sentRequest().url).toContain('create-polar-checkout');
+    expect(sentRequest().url).not.toContain('create-checkout-session');
+    expect(JSON.parse(sentRequest().init.body as string)).toMatchObject({ plan_id: 'pro' });
+  });
+
+  it('returns the hosted url and asks the opener to redirect', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        redirect: true,
+        url: 'https://polar.sh/checkout/abc',
+        checkout_id: 'co_1',
+        plan_id: 'pro',
+        amount: 5900,
+        currency: 'usd',
+      }),
+    );
+
+    const checkout = await beginCheckout('pro');
+
+    expect(checkout.redirect).toBe(true);
+    expect(checkout.url).toBe('https://polar.sh/checkout/abc');
+    expect(checkout.amount).toBe(5900);
+    expect(checkout.currency).toBe('usd');
+  });
+
+  it('navigates to the hosted page instead of opening a modal', async () => {
+    const assign = vi.fn();
+    vi.stubGlobal('window', { ...window, location: { assign } });
+    fetchMock.mockResolvedValue(
+      jsonResponse({ redirect: true, url: 'https://polar.sh/checkout/abc', checkout_id: 'co_1' }),
+    );
+
+    const outcome = await openRazorpayCheckout(await beginCheckout('pro'));
+
+    expect(assign).toHaveBeenCalledWith('https://polar.sh/checkout/abc');
+    // Not 'completed': nothing was paid yet and the browser is mid-navigation to
+    // the hosted page. Reporting 'completed' sent callers to the settings success
+    // page, which overwrote this navigation and left the customer on Paqt instead
+    // of on the checkout page.
+    expect(outcome).toBe('redirected');
+  });
+
+  it('fails clearly when the endpoint returns no url', async () => {
+    // A checkout with no hosted page would otherwise render a broken modal.
+    fetchMock.mockResolvedValue(jsonResponse({ redirect: true }));
+
+    expect(await errorCode(beginCheckout('pro'))).toBe('checkout_failed');
+  });
+
+  it('surfaces the server error code for an unmapped plan', async () => {
+    fetchMock.mockResolvedValue(errorResponse(500, 'price_not_configured', 'cannot be purchased'));
+
+    expect(await errorCode(beginCheckout('pro'))).toBe('price_not_configured');
+  });
+
+  it('drops the idempotency key after a rejected attempt', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ redirect: true, url: 'https://x/1' }));
+    await beginCheckout('pro');
+    const first = JSON.parse(fetchMock.mock.calls[0][1].body as string).idempotency_key;
+
+    fetchMock.mockResolvedValue(errorResponse(409, 'active_subscription_exists', 'already on a plan'));
+    expect(await errorCode(beginCheckout('pro'))).toBe('active_subscription_exists');
+
+    fetchMock.mockResolvedValue(jsonResponse({ redirect: true, url: 'https://x/2' }));
+    await beginCheckout('pro');
+    const second = JSON.parse(fetchMock.mock.calls[2][1].body as string).idempotency_key;
+
+    expect(second).not.toBe(first);
   });
 });

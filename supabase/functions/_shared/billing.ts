@@ -10,6 +10,7 @@ import {
   hasPaidPeriod,
   hasStartedCycle,
   isLiveStatus,
+  isTerminalStatus,
   listSubscriptions,
   mapRazorpayStatus,
   ms,
@@ -112,6 +113,19 @@ export interface BillingState {
   last_razorpay_subscription_id: string | null;
   last_razorpay_customer_id: string | null;
   last_status: string | null;
+  /**
+   * Which provider the entitled row belongs to. Absent on a deployment whose
+   * database has not run the provider migration yet, so callers must not assume
+   * it is present.
+   */
+  provider?: string | null;
+  provider_subscription_id?: string | null;
+  provider_customer_id?: string | null;
+  /** Raw provider status of the entitled row, whatever provider wrote it. */
+  provider_status?: string | null;
+  last_provider?: string | null;
+  last_provider_subscription_id?: string | null;
+  last_provider_customer_id?: string | null;
   pending_plan_id: string | null;
   pending_plan_name: string | null;
   pending_change_at: number | null;
@@ -164,10 +178,9 @@ export interface ApplyResult {
 }
 
 /** Terminal states are deliberate final decisions and always win the ordering
- *  guard; the guard above them stops a late charge from resurrecting one. */
-function isTerminalStatus(status: PaqtStatus): boolean {
-  return status === 'canceled' || status === 'completed' || status === 'expired' || status === 'canceling';
-}
+ *  guard; the guard above them stops a late charge from resurrecting one.
+ *  Imported rather than redeclared so the Polar and Razorpay paths cannot drift
+ *  into disagreeing about which states win. */
 
 /**
  * Writes a Razorpay subscription into the authoritative `subscriptions` table and

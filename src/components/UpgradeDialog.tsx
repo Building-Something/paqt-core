@@ -131,6 +131,7 @@ export function UpgradeDialog({
       if (outcome === 'completed') {
         window.location.assign('/settings?checkout=success');
       }
+      // For redirect flows (e.g. Polar), navigation happens in openRazorpayCheckout.
     } catch (caught) {
       if (isPaidPeriodReplacement(caught)) {
         // The account still owns a period it has paid for. Starting the new plan
@@ -223,6 +224,7 @@ export function UpgradeDialog({
                   key={plan.id}
                   name={plan.name}
                   price={plan.price}
+                  currency={plan.currency}
                   tagline={plan.tagline}
                   features={plan.features}
                   cta={plan.cta}
