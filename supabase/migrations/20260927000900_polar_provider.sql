@@ -65,3 +65,21 @@ alter table public.plan_prices
 create unique index if not exists plan_prices_provider_product_unique
   on public.plan_prices (provider, provider_product_id);
 
+-- ---------------------------------------------------------------------------
+-- subscriptions: the upsert target.
+--
+-- paqt_upsert_subscription resolves on (provider, razorpay_subscription_id):
+-- one provider's subscription id must never be inserted twice, while the same
+-- id string under two different providers is not a collision. This index is
+-- what ON CONFLICT needs in order to infer that.
+--
+-- Dropping the index above at the top of this file is not a no-op safety net --
+-- it removes the only thing that made the upsert work at all. Without it every
+-- Polar webhook dies with SQLSTATE 42P10 ("there is no unique or exclusion
+-- constraint matching the ON CONFLICT specification"), Polar retries until it
+-- gives up, and the customer's payment is never turned into a subscription.
+-- The "payment received, setting up plan" state is exactly this failure.
+-- ---------------------------------------------------------------------------
+create unique index if not exists subscriptions_provider_id_unique
+  on public.subscriptions (provider, razorpay_subscription_id);
+
