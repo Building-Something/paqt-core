@@ -489,6 +489,34 @@ export function clearHistory(): HistoryEntry[] {
   return [];
 }
 
+/**
+ * Removes every piece of locally-cached history for the current user without
+ * touching the cloud (used after a deleted account has already been wiped
+ * server-side, so no trace of it survives on this device).
+ */
+export function wipeLocalHistory(): void {
+  const keys = [GUEST_KEY];
+  const userId = currentUserId;
+  if (userId) {
+    keys.push(`${GUEST_KEY}.${userId}`);
+  }
+  for (const key of keys) {
+    try {
+      window.localStorage.removeItem(key);
+    } catch {
+      // Best-effort.
+    }
+  }
+  try {
+    window.localStorage.removeItem(TOMBSTONE_KEY);
+  } catch {
+    // Best-effort.
+  }
+  clearAllPayloads();
+  pendingIds.clear();
+  notify();
+}
+
 export function subscribeHistory(listener: HistoryListener): () => void {
   listeners.add(listener);
   return () => {

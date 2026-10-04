@@ -19,7 +19,7 @@ const DETAILS = [
     description:
       'Paqt reads every page of your PDF and returns the clauses worth your attention — not generic prose.',
     bullets: [
-      'Text is extracted in your browser — the raw file never leaves the client',
+      'Your document is read on your device — the file never leaves',
       'Multi-page documents are analyzed page by page so nothing is skimmed',
       'Every finding links to an exact page and quotes the underlying clause',
     ],
@@ -53,8 +53,8 @@ const DETAILS = [
       'Long reviews checkpoint after every analyzed page, so pausing is safe and resuming is instant.',
     bullets: [
       'Paused reviews resume from the last analyzed page',
-      'Completed analyses reopen in read-only form without re-running the AI',
-      'Up to 40 entries kept in browser history',
+      'Completed analyses reopen in read-only form without re-running the analysis',
+      'Up to 40 entries kept in your recent reviews',
     ],
   },
   {
@@ -72,11 +72,10 @@ const DETAILS = [
     icon: ShieldCheck,
     title: 'Private by design',
     description:
-      'Paqt is built around a small, honest data footprint: guest workspace, local history, server-side keys.',
+      'Paqt is built around a small, honest data footprint: guest workspace, private history, nothing unnecessary stored.',
     bullets: [
-      'No account or sign-up — the whole workspace is your browser',
-      'AI credentials live on the server and never ship to the browser',
-      'No database at this stage: nothing is permanently stored',
+      'No account or sign-up needed to try the workspace',
+      'Nothing is permanently stored until you save to your account',
     ],
   },
 ];

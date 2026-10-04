@@ -100,6 +100,15 @@ export function saveCheckpoint(checkpoint: ResumeCheckpoint): ResumeCheckpoint[]
   return next;
 }
 
+export function clearCheckpoints(): void {
+  try {
+    window.localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // Best-effort.
+  }
+  notify();
+}
+
 export function subscribeCheckpoints(listener: CheckpointListener): () => void {
   listeners.add(listener);
   return () => {

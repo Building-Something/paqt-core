@@ -180,14 +180,31 @@ export type GroqErrorCode =
   | 'oversized'
   | 'invalid_json'
   | 'network'
+  | 'unauthorized'
+  | 'plan_required'
+  | 'plan_expired'
+  | 'quota_exhausted'
+  | 'credits_exhausted'
+  | 'meter_unavailable'
   | 'unknown';
+
+export function isBillingErrorCode(code: string): boolean {
+  return (
+    code === 'unauthorized' ||
+    code === 'plan_required' ||
+    code === 'plan_expired' ||
+    code === 'quota_exhausted' ||
+    code === 'credits_exhausted' ||
+    code === 'meter_unavailable'
+  );
+}
 
 export function groqErrorMessage(code: GroqErrorCode): string {
   switch (code) {
     case 'not_configured':
-      return 'Groq API key is not configured on the server. Add GROQ_API_KEY and restart Paqt.';
+      return 'Paqt is not fully set up yet. Please contact support to enable AI analysis.';
     case 'invalid_key':
-      return 'Your Groq API key was rejected. Check the server environment variable.';
+      return 'The AI service could not authenticate Paqt. Please contact support.';
     case 'rate_limited':
       return 'The AI service is temporarily rate-limited. Paqt will retry automatically; try again shortly.';
     case 'rate_limited_daily':
@@ -199,6 +216,18 @@ export function groqErrorMessage(code: GroqErrorCode): string {
     case 'bad_request':
     case 'invalid_json':
       return 'AI returned an unexpected analysis format. Please retry.';
+    case 'unauthorized':
+      return 'You need to sign in to use Paqt.';
+    case 'plan_required':
+      return 'This feature requires an active Paqt subscription.';
+    case 'plan_expired':
+      return 'Your subscription period has ended. Renew to continue.';
+    case 'quota_exhausted':
+      return 'Your monthly quota is used up. Upgrade your plan for more.';
+    case 'credits_exhausted':
+      return 'Your plan credit balance is used up. Contact your account manager.';
+    case 'meter_unavailable':
+      return 'Usage metering is temporarily unavailable. Try again in a moment.';
     case 'upstream':
     case 'network':
     case 'unknown':

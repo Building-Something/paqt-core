@@ -308,6 +308,10 @@
   animation-delay: -2.8s;
 }
 
+.float-chip--d4 {
+  animation-delay: -4.2s;
+}
+
 @keyframes float-chip {
   from {
     transform: translate3d(0, 0, 0);

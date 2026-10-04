@@ -29,11 +29,11 @@ function HealthBadge() {
 
   const meta =
     health.status === 'ok'
-      ? { dot: 'bg-low-500', label: 'AI connected' }
+      ? { dot: 'bg-low-500', label: 'AI ready' }
       : health.status === 'missing'
-        ? { dot: 'bg-medium-500', label: 'AI key not set' }
+        ? { dot: 'bg-medium-500', label: 'AI not ready yet' }
         : health.status === 'offline'
-          ? { dot: 'bg-critical-500', label: 'Server offline' }
+          ? { dot: 'bg-critical-500', label: 'Service offline' }
           : { dot: 'bg-muted-foreground/40', label: 'Checking' };
 
   return (
@@ -72,6 +72,7 @@ const NAV_SECTIONS = [
     label: 'Resources',
     links: [
       { to: '/', label: 'Site home', icon: Home, end: true },
+      { to: '/pricing', label: 'Pricing', icon: LayoutDashboard, end: false },
       { to: '/settings', label: 'Settings', icon: Settings2, end: false },
     ],
   },
@@ -109,8 +110,7 @@ function UserCard() {
           <p className="truncate text-sm font-medium text-foreground">
             {user?.email ?? 'Guest workspace'}
           </p>
-          <div className="mt-0.5 flex items-center gap-1.5">
-            <HealthBadge />
+          <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
             <span className="text-[11px] text-muted-foreground/50">v1</span>
           </div>
         </div>

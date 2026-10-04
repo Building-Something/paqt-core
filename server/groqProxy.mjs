@@ -1,13 +1,21 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import {
+  isBillingConfigured,
+  verifyBillingAccess,
+  verifyUser,
+  isPlanActive,
+  consume,
+  refund,
+  MeterError,
+} from './entitlements.mjs';
 
 const GROQ_ENDPOINT = 'https://api.groq.com/openai/v1/chat/completions';
 const GROQ_MODEL = 'openai/gpt-oss-120b';
 const BODY_LIMIT = 20 * 1024 * 1024; // 20 MB
 const UPSTREAM_TIMEOUT_MS = 120_000; // 120 seconds
-const REASONING_EFFORT = 'low';
+const REASONING_EFFORT = 'medium';
 const INCLUDE_REASONING = false;
-const REASONING_LEVELS = ['low', 'medium', 'high'];
 
 const RATE_LIMIT_HEADERS = [
   'retry-after',
@@ -254,12 +262,85 @@ export async function groqProxyHandler(req, res) {
     return;
   }
 
-  // Clamp to the model's supported set; fall back to the default for anything unknown.
-  const requestedEffort = body.reasoning_effort;
-  const reasoningEffort =
-    typeof requestedEffort === 'string' && REASONING_LEVELS.includes(requestedEffort)
-      ? requestedEffort
-      : REASONING_EFFORT;
+  // ---- Auth + entitlement gate -------------------------------------------------
+  // Only active here when the server has Supabase credentials. Local dev with an
+  // unconfigured Supabase keeps the old open behaviour.
+  let userId = null;
+  let consumedOp = null;
+  let consumedRunId = null;
+
+  if (isBillingConfigured() && !(await verifyBillingAccess())) {
+    // Configured but rejected. Answering 401 here would tell a signed-in paying
+    // customer to sign in again, which is both useless and untrue.
+    sendError(
+      res,
+      createError(
+        503,
+        'billing_unavailable',
+        'Billing is temporarily unavailable. Please try again shortly.',
+      ),
+    );
+    return;
+  }
+
+  if (isBillingConfigured()) {
+    const auth = await verifyUser(req.headers.authorization);
+    if (!auth) {
+      sendError(res, createError(401, 'unauthorized', 'Sign in to use Paqt.'));
+      return;
+    }
+    userId = auth.userId;
+
+    const requestedOp = req.headers['x-paqt-op'];
+    const VALID_OPS = ['analysis', 'draft', 'chat', 'clause'];
+    const op = typeof requestedOp === 'string' && VALID_OPS.includes(requestedOp) ? requestedOp : 'chat';
+    // The run id is the only thing that decides metering: the first request of a
+    // multi-step run books the unit (idempotently, per run) and later requests
+    // of the same run are free repeats. Marking a request "not metered" is not
+    // something a browser may do for analysis/draft — that would let a client
+    // skip the meter entirely — so the header is ignored for those ops.
+    const runId = typeof req.headers['x-paqt-run-id'] === 'string'
+      ? (req.headers['x-paqt-run-id'] || null)
+      : null;
+
+    try {
+      if (op === 'analysis' || op === 'draft') {
+        if (runId) {
+          await consume(userId, op, runId);
+          consumedOp = op;
+          consumedRunId = runId;
+        } else {
+          // Requests outside any run are plan-checked only (chat-like
+          // single-shot analysis), exactly as the client documents — never
+          // refused, never charged.
+          const active = await isPlanActive(userId);
+          if (!active) {
+            throw new MeterError({
+              status: 402,
+              code: 'plan_required',
+              message: 'This feature requires an active Paqt subscription.',
+            });
+          }
+        }
+      } else {
+        const active = await isPlanActive(userId);
+        if (!active) {
+          throw new MeterError({
+            status: 402,
+            code: 'plan_required',
+            message: 'This feature requires an active Paqt subscription.',
+          });
+        }
+      }
+    } catch (error) {
+      sendError(res, error);
+      return;
+    }
+  }
+
+  // Reasoning effort is pinned to the default (medium): the product no longer
+  // exposes a choice, so always send the balanced profile upstream.
+  const reasoningEffort = REASONING_EFFORT;
 
   const upstreamBody = {
     model: GROQ_MODEL,
@@ -290,6 +371,11 @@ export async function groqProxyHandler(req, res) {
     });
   } catch (error) {
     clearTimeout(timer);
+    if (consumedOp) {
+      await refund(userId, consumedOp, consumedRunId);
+      consumedOp = null;
+      consumedRunId = null;
+    }
     if (error.name === 'AbortError') {
       sendError(res, createError(504, 'timeout', 'The AI analysis took too long.'));
     } else {
@@ -306,6 +392,11 @@ export async function groqProxyHandler(req, res) {
   try {
     upstreamText = await upstream.text();
   } catch {
+    if (consumedOp) {
+      await refund(userId, consumedOp, consumedRunId);
+      consumedOp = null;
+      consumedRunId = null;
+    }
     sendError(res, createError(502, 'upstream', 'Could not read the AI response.'));
     return;
   }
@@ -313,6 +404,11 @@ export async function groqProxyHandler(req, res) {
   copyUpstreamRateLimitHeaders(upstream, res);
 
   if (!upstream.ok) {
+    if (consumedOp) {
+      await refund(userId, consumedOp, consumedRunId);
+      consumedOp = null;
+      consumedRunId = null;
+    }
     let parsed = null;
     try {
       parsed = JSON.parse(upstreamText);

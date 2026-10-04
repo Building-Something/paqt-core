@@ -60,6 +60,12 @@ export function MarketingNav() {
           >
             About
           </Link>
+          <Link
+            to="/pricing"
+            className="rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            Pricing
+          </Link>
         </nav>
         <div className="flex shrink-0 items-center gap-2">
           <ThemeToggle />
@@ -98,6 +104,9 @@ export function MarketingFooter() {
           </Link>
           <Link to="/features" className="transition-colors hover:text-foreground">
             Features
+          </Link>
+          <Link to="/pricing" className="transition-colors hover:text-foreground">
+            Pricing
           </Link>
           <Link to="/about" className="transition-colors hover:text-foreground">
             About

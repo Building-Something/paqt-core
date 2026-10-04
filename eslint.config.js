@@ -25,7 +25,6 @@ export default tseslint.config(
           allowConstantExport: true,
           allowExportNames: [
             'useAnalysis',
-            'useSettings',
             'useTheme',
             'buttonVariants',
             'badgeVariants',

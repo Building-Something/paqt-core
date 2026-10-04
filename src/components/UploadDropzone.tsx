@@ -113,8 +113,7 @@ export function UploadDropzone({ onFileSelected, busy = false }: UploadDropzoneP
           for a PDF
         </p>
         <p className="mt-3 text-xs text-muted-foreground">
-          Contracts are extracted in your browser; analysis runs through Paqt’s
-          server.
+          Contracts are read on your device; analysis runs privately through Paqt.
         </p>
       </div>
 

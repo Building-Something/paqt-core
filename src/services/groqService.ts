@@ -18,6 +18,7 @@ import { computeRiskScore, normalizeRisks } from '../utils/risks';
 import { keepVerifiedRisks, verifyRisksAgainstPages } from '../utils/riskVerify';
 import { estimateRequestTokens, extractRetryAfterMs } from '../utils/rateLimit';
 import { parseJsonObject } from '../utils/json';
+import { supabase } from '../lib/supabase';
 
 const MAX_ATTEMPTS = 3;
 const BACKOFF_BASE_MS = 1000;
@@ -27,6 +28,56 @@ const CHAT_MAX_TOKENS = 2048;
 const pacer = new TokenPacer({ tokensPerMinute: CLIENT_TOKEN_BUDGET_PER_MINUTE });
 
 export type ReasoningEffort = 'low' | 'medium' | 'high';
+
+/**
+ * Operation context attached to every Groq request so the server can enforce
+ * the account's plan. 'analysis' and 'draft' carry an explicit metering header
+ * on every request; the DB books at most one unit per (user, period, op, run
+ * id), so only the first request of a run actually charges and each extra page
+ * or interaction of the same run is a free deduped repeat. 'chat' and 'clause'
+ * require an active plan but never decrement a quota.
+ */
+export type GroqOp = 'analysis' | 'draft' | 'chat' | 'clause';
+
+const opStack: GroqOp[] = ['chat'];
+let groqRunId: string | null = null;
+
+export function pushGroqOp(op: GroqOp): void {
+  opStack.push(op);
+}
+
+export function popGroqOp(): void {
+  if (opStack.length > 1) {
+    opStack.pop();
+  }
+}
+
+/**
+ * Sets the idempotency key for the current metered run. Because the server
+ * books at most one unit per (user, period, op, run id), a checkpoint resume
+ * or a retry that reuses the same id can never double-charge the quota.
+ */
+export function setGroqRunId(id: string | null): void {
+  groqRunId = id;
+}
+
+let cachedAccessToken: string | null = null;
+
+async function getGroqAccessToken(): Promise<string | null> {
+  if (!supabase) {
+    return null;
+  }
+  try {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token ?? null;
+    if (token) {
+      cachedAccessToken = token;
+    }
+    return cachedAccessToken;
+  } catch {
+    return cachedAccessToken;
+  }
+}
 
 const DEFAULT_REASONING_EFFORT: ReasoningEffort = 'medium';
 
@@ -112,9 +163,30 @@ async function callGroq(
 
   let response: Response;
   try {
+    const op = opStack[opStack.length - 1];
+    // Metering is decided server-side from the run id, never from a client
+    // flag the browser could clear to skip the meter: the DB books at most one
+    // unit per (user, period, op, run id), so every request of a run is safe to
+    // send — the first call charges, all later calls of the same run are
+    // deduped by the ledger as free repeats. One analysis therefore makes as
+    // many Groq calls as it needs (pages, interaction, synthesis) while the
+    // monthly quota counts the run itself only once. A request outside a run
+    // (no id) is checked against the plan but never billed and never refused.
+    const runId = groqRunId;
+    const token = await getGroqAccessToken();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'x-paqt-op': op,
+    };
+    if (runId !== null && (op === 'analysis' || op === 'draft')) {
+      headers['x-paqt-run-id'] = runId;
+    }
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
     response = await fetch('/api/groq', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(payload),
     });
   } catch (error) {
@@ -688,6 +760,8 @@ export async function analyzePages(
   onProgress?: AnalysisProgressCallback,
   options: AnalyzePagesOptions = {},
 ): Promise<ContractAnalysis> {
+  pushGroqOp('analysis');
+  try {
   const totalChars = pages.reduce((sum, page) => sum + page.text.length, 0);
   const startIndex = options.fromIndex ?? 0;
   const resuming = startIndex > 0;
@@ -781,6 +855,9 @@ export async function analyzePages(
   onProgress?.('Preparing decision brief…', 'synthesizing', { risks: merged });
   const baselineScore = computeRiskScore(merged);
   return synthesizeDocument(merged, allKeyTerms, baselineScore);
+  } finally {
+    popGroqOp();
+  }
 }
 
 export async function chatWithContract(
@@ -814,7 +891,12 @@ export async function chatWithContract(
 
   const userPrompt = `Contract text (extracted from PDF, page markers included):\n${contextText}\n${analysisSummary}\n\nQuestion:\n${question}`;
 
-  return groqTextRequest(systemPrompt, userPrompt);
+  pushGroqOp('chat');
+  try {
+    return groqTextRequest(systemPrompt, userPrompt);
+  } finally {
+    popGroqOp();
+  }
 }
 
 function buildChatContext(

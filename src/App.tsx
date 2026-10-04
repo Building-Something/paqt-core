@@ -1,10 +1,12 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AnalysisProvider } from './contexts/AnalysisContext';
-import { SettingsProvider } from './contexts/SettingsContext';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { AuthProvider } from './contexts/AuthContext';
+import { EntitlementProvider } from './contexts/EntitlementContext';
 import { ToastProvider } from './contexts/ToastContext';
+import { UpgradeProvider } from './components/UpgradeDialog';
 import { AppShell } from './components/AppShell';
+import { AppErrorBoundary } from './components/AppErrorBoundary';
 import { RequireAuth } from './components/RequireAuth';
 import { DashboardPage } from './pages/DashboardPage';
 import { AnalyzeHubPage } from './pages/AnalyzeHubPage';
@@ -15,6 +17,7 @@ import { SettingsPage } from './pages/SettingsPage';
 import { PrivacyPage } from './pages/PrivacyPage';
 import { LandingPage } from './pages/LandingPage';
 import { FeaturesPage } from './pages/FeaturesPage';
+import { PricingPage } from './pages/PricingPage';
 import { AuthPage } from './pages/AuthPage';
 
 export default function App() {
@@ -23,32 +26,37 @@ export default function App() {
       <BrowserRouter>
         <AuthProvider>
           <ToastProvider>
-            <SettingsProvider>
-              <AnalysisProvider>
-                <Routes>
-                  <Route path="/" element={<LandingPage />} />
-                  <Route path="/features" element={<FeaturesPage />} />
-                  <Route path="/about" element={<AboutPage />} />
-                  <Route path="/privacy" element={<PrivacyPage />} />
-                  <Route path="/signin" element={<AuthPage key="signin" mode="signin" />} />
-                  <Route path="/signup" element={<AuthPage key="signup" mode="signup" />} />
-                  <Route
-                    element={
-                      <RequireAuth>
-                        <AppShell />
-                      </RequireAuth>
-                    }
-                  >
-                    <Route path="/dashboard" element={<DashboardPage />} />
-                    <Route path="/analysis" element={<AnalysisPage />} />
-                    <Route path="/generate" element={<GeneratePage />} />
-                    <Route path="/analyze" element={<AnalyzeHubPage />} />
-                    <Route path="/settings" element={<SettingsPage />} />
-                  </Route>
-                  <Route path="*" element={<Navigate to="/" replace />} />
-                </Routes>
-              </AnalysisProvider>
-            </SettingsProvider>
+            <EntitlementProvider>
+              <UpgradeProvider>
+                <AnalysisProvider>
+                  <AppErrorBoundary>
+                      <Routes>
+                      <Route path="/" element={<LandingPage />} />
+                      <Route path="/features" element={<FeaturesPage />} />
+                      <Route path="/pricing" element={<PricingPage />} />
+                      <Route path="/about" element={<AboutPage />} />
+                      <Route path="/privacy" element={<PrivacyPage />} />
+                      <Route path="/signin" element={<AuthPage key="signin" mode="signin" />} />
+                      <Route path="/signup" element={<AuthPage key="signup" mode="signup" />} />
+                      <Route
+                        element={
+                          <RequireAuth>
+                            <AppShell />
+                          </RequireAuth>
+                        }
+                      >
+                        <Route path="/dashboard" element={<DashboardPage />} />
+                        <Route path="/analysis" element={<AnalysisPage />} />
+                        <Route path="/generate" element={<GeneratePage />} />
+                        <Route path="/analyze" element={<AnalyzeHubPage />} />
+                        <Route path="/settings" element={<SettingsPage />} />
+                      </Route>
+                      <Route path="*" element={<Navigate to="/" replace />} />
+                    </Routes>
+                    </AppErrorBoundary>
+                  </AnalysisProvider>
+              </UpgradeProvider>
+            </EntitlementProvider>
           </ToastProvider>
         </AuthProvider>
       </BrowserRouter>

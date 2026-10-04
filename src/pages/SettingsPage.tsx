@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { useAnalysis } from '../contexts/AnalysisContext';
+import { PlanUsageCard } from '../components/PlanUsage';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
@@ -67,10 +68,14 @@ export function SettingsPage() {
       <h1 className="mt-1 text-3xl font-semibold tracking-tight text-foreground">Settings</h1>
       <p className="mt-2 text-sm text-muted-foreground">
         Signed in as <span className="font-medium text-foreground">{user?.email}</span>. Your
-        reviews are saved to your Supabase account — nothing is stored only on this device.
+        reviews are saved to your account — nothing is stored only on this device.
       </p>
 
-      <section className="mt-8 rounded-xl border border-border bg-card">
+      <div className="mt-8">
+        <PlanUsageCard />
+      </div>
+
+      <section className="mt-6 rounded-xl border border-border bg-card">
         <div className="border-b border-border px-5 py-4">
           <h2 className="flex items-center gap-2 text-sm font-semibold text-foreground">
             <KeyRound className="size-4 text-primary" aria-hidden="true" />
@@ -159,7 +164,7 @@ export function SettingsPage() {
 
       <p className="mt-8 flex items-center gap-2 text-xs text-muted-foreground">
         <ShieldCheck className="size-4 text-primary" aria-hidden="true" />
-        Your contract or PDF is safe — reviews live in your private Supabase account.
+        Your contract or PDF is safe — reviews live in your private account.
       </p>
     </div>
   );

@@ -14,7 +14,7 @@ import { useAnalysis } from '../contexts/AnalysisContext';
 import { formatRelativeTime, type HistoryEntry } from '../services/historyService';
 import type { RiskLevel } from '../types';
 import { EmptyState } from '../components/EmptyState';
-import { ReasoningEffortMenu } from '../components/ReasoningEffortMenu';
+import { PlanUsageChip, PlanUsageCard } from '../components/PlanUsage';
 import { ScoreBadge } from '../components/ScoreBadge';
 import { CheckpointList } from '../components/CheckpointList';
 import { PreviewThumb } from '../components/PreviewThumb';
@@ -339,8 +339,8 @@ export function DashboardPage() {
             pipeline.
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <ReasoningEffortMenu />
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <PlanUsageChip />
           <Button variant="outline" asChild>
             <Link to="/generate">
               <FilePenLine className="size-4" aria-hidden="true" />
@@ -441,6 +441,7 @@ export function DashboardPage() {
         </section>
 
         <div className="flex flex-col gap-6">
+          <PlanUsageCard compact />
           <SeverityCard analyses={analyses} />
           <QuickActions />
         </div>

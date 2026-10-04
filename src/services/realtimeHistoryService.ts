@@ -8,10 +8,10 @@ import { supabase } from '../lib/supabase';
  * rest of the app can "just" ask to be told whenever anything in the remote
  * history changed — no manual refresh, no polling.
  *
- * Setup requirement (one-time, dashboard):
+ * The table must be part of the `supabase_realtime` publication:
  *   alter publication supabase_realtime add table public.documents;
- * Run that in the Supabase SQL editor once. Until then this module is a no-op
- * (the app degrades to refresh-to-see, exactly as before).
+ * (already applied on the live project — if a new project is ever spun up,
+ * re-run that in the SQL editor once.)
  */
 
 let sharedChannel: Awaited<ReturnType<NonNullable<typeof supabase>['channel']>> | null = null;

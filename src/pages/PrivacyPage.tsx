@@ -29,11 +29,11 @@ export function PrivacyPage() {
             </div>
             <div>
               <h2 className="text-base font-semibold text-foreground">
-                Extraction happens in your browser
+                Reading happens on your device
               </h2>
               <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
-                When you upload a PDF, Paqt reads the text inside it using your
-                browser. The file is not uploaded to Paqt’s server for extraction.
+                When you upload a PDF, Paqt reads the text on your device. Your
+                file is never uploaded for reading.
               </p>
             </div>
           </CardContent>
@@ -46,12 +46,11 @@ export function PrivacyPage() {
             </div>
             <div>
               <h2 className="text-base font-semibold text-foreground">
-                Analysis goes through Paqt’s server
+                Analysis runs privately through Paqt
               </h2>
               <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
-                The extracted contract text is sent to Groq through Paqt’s server
-                proxy for analysis. Your API credentials stay server-side and are
-                never exposed to the browser.
+                Your contract text is analyzed privately through Paqt. Your
+                account is never shared with anyone.
               </p>
             </div>
           </CardContent>

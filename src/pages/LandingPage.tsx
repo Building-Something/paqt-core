@@ -4,15 +4,15 @@ import {
   ArrowRight,
   BarChart3,
   Check,
-  FileDown,
-  FilePenLine,
   FileText,
-  MessageSquare,
-  RotateCcw,
+  MessageSquareText,
+  PenLine,
   ScanSearch,
   Search,
+  Send,
   ShieldCheck,
   Sparkles,
+  Upload,
   Zap,
 } from 'lucide-react';
 import { Button } from '../components/ui/button';
@@ -22,76 +22,83 @@ import { useAuth } from '../contexts/AuthContext';
 
 const FEATURES = [
   {
+    icon: FileText,
+    title: 'Draft any contract from a blank page to sign-ready.',
+    description:
+      'Pick from 50+ expertly built templates or describe what you need in plain language. Paqt assembles the clauses, fills the parties, and delivers a polished draft in under a minute.',
+    feature: true,
+  },
+  {
+    icon: PenLine,
+    title: 'Describe your needs',
+    description: 'Parties, terms, obligations. Add them in plain English.',
+  },
+  {
+    icon: Send,
+    title: 'Send to sign',
+    description: 'Finalize and dispatch for secure e-signature in one click.',
+  },
+  {
     icon: ScanSearch,
-    title: 'Review contracts',
+    title: 'Understand any contract in seconds, not days.',
     description:
-      'Upload a PDF and Paqt finds the clauses that deserve your attention — every finding linked to an exact page and quoted clause.',
+      'Upload a PDF, paste a link, or drop an agreement straight from your inbox. Paqt scans the full document, flags the clauses that matter, and explains them in plain language.',
+    feature: true,
   },
   {
-    icon: FilePenLine,
-    title: 'Draft agreements',
-    description:
-      'Describe the deal in plain English. Paqt asks a few clarifying questions and composes a structured, legal-style agreement.',
+    icon: Upload,
+    title: 'Upload an agreement',
+    description: 'Drag, drop, or paste a URL. We read the whole thing.',
   },
   {
-    icon: MessageSquare,
-    title: 'Ask follow-ups',
-    description:
-      'The assistant answers with the real clauses in your document as context, so follow-up questions stay grounded in the contract.',
-  },
-  {
-    icon: FileDown,
-    title: 'Export a clean PDF',
-    description:
-      'One click turns a drafted agreement into a professionally formatted legal PDF, with signature blocks ready to go.',
-  },
-  {
-    icon: RotateCcw,
-    title: 'Resume anytime',
-    description:
-      'Long reviews resume from the last analyzed page. Completed results reopen instantly — no AI re-run needed.',
-  },
-  {
-    icon: ShieldCheck,
-    title: 'Built to stay lean',
-    description:
-      'PDFs are extracted in your browser and analyzed through Paqt’s server proxy. Account history stores compact summaries and small previews, not raw files — so storage stays flat across thousands of reviews.',
+    icon: MessageSquareText,
+    title: 'Ask your Contracting Copilot',
+    description: 'Chat for clause-level answers and request revisions.',
   },
 ];
 
 const STEPS = [
   {
     number: '01',
-    title: 'Upload a document',
+    title: 'Create',
     description:
-      'Drop in a PDF — NDAs, MSAs, vendor agreements, anything. Text is extracted in your browser, page by page.',
+      'Start from a template or describe the deal in plain language. Paqt drafts the full agreement.',
   },
   {
     number: '02',
-    title: 'Review the findings',
+    title: 'Review',
     description:
-      'Paqt scores the document, flags risks by severity, and pins each finding to the page and quote behind it.',
+      'Upload or paste any contract. Risks, missing clauses, and obligations surface instantly.',
   },
   {
     number: '03',
-    title: 'Decide with evidence',
+    title: 'Refine',
     description:
-      'Open any finding in context, ask the assistant follow-up questions, and act — or send the agreement through the same review.',
+      'Chat with your Contracting Copilot about any clause. Request changes and get them applied in one click.',
+  },
+  {
+    number: '04',
+    title: 'Sign & store',
+    description:
+      'Finalize with secure e-signature and keep everything organized in a searchable workspace.',
   },
 ];
 
 const USE_CASES = [
   {
     label: 'Sales & procurement',
-    detail: 'Fast reviews of inbound MSAs, NDAs, and statements of work — before they sit in your inbox for a week.',
+    detail:
+      'Fast reviews of inbound MSAs, NDAs, and statements of work before they sit in your inbox for a week.',
   },
   {
     label: 'Finance teams',
-    detail: 'Vendor and service agreements checked consistently, so negotiated terms don’t get silently re-introduced.',
+    detail:
+      "Vendor and service agreements checked consistently, so negotiated terms don't get silently re-introduced.",
   },
   {
     label: 'Founders',
-    detail: 'Pre-signature checks and composed agreements for partnership and customer documents, without a full legal review.',
+    detail:
+      'Pre-signature checks and composed agreements for partnership and customer documents, without a full legal review.',
   },
 ];
 
@@ -104,17 +111,17 @@ const FAQS = [
   {
     question: 'Is my document uploaded anywhere?',
     answer:
-      'Extraction happens entirely in your browser. The extracted text is analyzed through Paqt’s server proxy to the AI provider. We never store the original PDF — your account history keeps a compact summary of each review plus a small page preview.',
+      'Your document is read on your device and the text is analyzed privately through Paqt. We never store the original PDF, your account history keeps a compact summary of each review plus a small page preview.',
   },
   {
     question: 'Can I reopen an analysis without re-running the AI?',
     answer:
-      'Yes. Completed analyses are saved to your account and reopen instantly — findings, quotes, scores, and a page preview included.',
+      'Yes. Completed analyses are saved to your account and reopen instantly, with findings, quotes, scores, and a page preview included.',
   },
   {
     question: 'What do I need to get started?',
     answer:
-      'Create a free account, then open your workspace. Analysis features also need a GROQ_API_KEY configured on the server side (set in .env) — the key never ships to the browser.',
+      'Open your workspace and upload your first document, or compose an agreement from a plain-English brief.',
   },
 ];
 
@@ -303,21 +310,20 @@ export function LandingPage() {
                     <span className="absolute inline-flex size-full rounded-full bg-low-500 opacity-60" />
                     <span className="relative inline-flex size-2 rounded-full bg-low-500" />
                   </span>
-                  AI contract review &amp; drafting workspace
+                  The Contracting Copilot for modern legal teams
                 </p>
               </Reveal>
 
               <Reveal from="scale">
                 <h1 className="hero-headline mt-6 text-4xl font-semibold tracking-tight sm:text-5xl lg:mt-7 lg:text-[3.4rem] lg:leading-[1.05]">
-                  Know what you&rsquo;re signing.
+                  Smarter contracts, built in minutes.
                 </h1>
               </Reveal>
 
               <Reveal from="up" delay={120}>
                 <p className="mx-auto mt-4 max-w-xl text-base leading-relaxed text-muted-foreground sm:text-lg lg:mx-0">
-                  Paqt reviews the contracts you receive, flags the clauses that deserve your
-                  attention, and drafts the agreements you send — every finding tied to the exact
-                  page and quote.
+                  Paqt drafts, reviews, and finalizes agreements end-to-end. Drop the legalese, keep
+                  the precision, and close deals in hours, not weeks.
                 </p>
               </Reveal>
 
@@ -330,7 +336,7 @@ export function LandingPage() {
                     </Link>
                   </Button>
                   <Button size="lg" variant="outline" asChild>
-                    <Link to="/features">Explore features</Link>
+                    <a href="#product">See what it does</a>
                   </Button>
                 </div>
               </Reveal>
@@ -339,15 +345,15 @@ export function LandingPage() {
                 <ul className="mt-8 flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-xs text-muted-foreground lg:justify-start">
                   <li className="inline-flex items-center gap-1.5">
                     <Check className="size-3.5 text-low-600" aria-hidden="true" />
-                    Free account, works across devices
+                    Clause-level accuracy
                   </li>
                   <li className="inline-flex items-center gap-1.5">
                     <Check className="size-3.5 text-low-600" aria-hidden="true" />
-                    PDFs extracted in your browser
+                    Auto-fills parties &amp; dates
                   </li>
                   <li className="inline-flex items-center gap-1.5">
                     <Check className="size-3.5 text-low-600" aria-hidden="true" />
-                    Reopen results instantly
+                    Export to Word / PDF
                   </li>
                 </ul>
               </Reveal>
@@ -355,8 +361,8 @@ export function LandingPage() {
               <Reveal from="up" delay={360}>
                 <p className="mx-auto mt-8 inline-flex max-w-xl items-center justify-center gap-2 rounded-full border border-border bg-background/70 px-4 py-2 text-center text-xs text-muted-foreground shadow-sm backdrop-blur lg:mx-0">
                   <ShieldCheck className="size-3.5 shrink-0 text-low-600" aria-hidden="true" />
-                  Your contract or PDF stays safe with Paqt — encrypted in transit, saved to your
-                  private account, and never sold or shared.
+                  Your contract or PDF stays safe with Paqt. Encrypted in transit, and never sold or
+                  shared.
                 </p>
               </Reveal>
             </div>
@@ -384,19 +390,25 @@ export function LandingPage() {
                   <span className="flex size-5 items-center justify-center rounded-full bg-low-500/15 text-low-600">
                     <Check className="size-3" aria-hidden="true" />
                   </span>
-                  AI review complete
+                  NDA generated
                 </div>
                 <div className="float-chip float-chip--d2 absolute -bottom-6 -left-3 z-20 hidden items-center gap-2.5 rounded-xl border border-border/70 bg-background/80 px-3 py-2 shadow-lg backdrop-blur-xl sm:flex">
                   <span className="flex size-5 items-center justify-center rounded-full bg-primary/15 text-primary">
                     <Zap className="size-3" aria-hidden="true" />
                   </span>
-                  <span className="text-xs font-medium text-foreground">Risk score 42</span>
+                  <span className="text-xs font-medium text-foreground">Risks found · 4</span>
                 </div>
                 <div className="float-chip float-chip--d3 absolute right-4 -bottom-8 z-20 hidden items-center gap-2 rounded-xl border border-border/70 bg-background/80 px-3 py-2 text-xs font-medium text-foreground shadow-lg backdrop-blur-xl md:flex">
                   <span className="flex size-5 items-center justify-center rounded-full bg-primary/15 text-primary">
                     <Sparkles className="size-3" aria-hidden="true" />
                   </span>
-                  Draft exported as PDF
+                  Redraft applied
+                </div>
+                <div className="float-chip float-chip--d4 absolute -left-4 top-1/3 z-20 hidden items-center gap-2 rounded-xl border border-border/70 bg-background/80 px-3 py-2 text-xs font-medium text-foreground shadow-lg backdrop-blur-xl lg:flex">
+                  <span className="flex size-5 items-center justify-center rounded-full bg-low-500/15 text-low-600">
+                    <Send className="size-3" aria-hidden="true" />
+                  </span>
+                  Sent for signature
                 </div>
               </div>
             </Reveal>
@@ -408,13 +420,13 @@ export function LandingPage() {
       <section className="border-t border-border py-8" aria-label="Document types handled by Paqt">
         <div className="mx-auto max-w-6xl px-4 sm:px-6">
           <p className="text-center text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground/70">
-            Built for the contracts you see every day
+            Built for every kind of agreement
           </p>
           <div className="marquee mt-5">
             <div className="marquee-track">
               {[0, 1].map((copy) => (
                 <ul key={copy} className="flex shrink-0 items-center gap-10" aria-hidden={copy === 1}>
-                  {['NDAs', 'Master Service Agreements', 'Statements of Work', 'Vendor Agreements', 'Partnership Deals', 'Subscription Terms', 'Licensing', 'Inbound Quotes'].map((type) => (
+                  {['NDA review', 'M&A contracts', 'Employment agreements', 'SaaS terms', 'Master service agreements', 'Vendor contracts', 'Non-compete clauses', 'IP assignment', 'Data processing agreements', 'Lease agreements'].map((type) => (
                     <li
                       key={type}
                       className="flex items-center gap-3 whitespace-nowrap text-sm font-medium text-muted-foreground"
@@ -434,20 +446,32 @@ export function LandingPage() {
       <section id="features" className="border-t border-border bg-card/50">
         <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 sm:py-20">
           <div className="max-w-2xl">
-            <p className="tech-mono text-sm font-medium text-primary">Features</p>
+            <p className="tech-mono text-sm font-medium text-primary">The Product</p>
             <h2 className="mt-1 font-display text-3xl font-semibold tracking-tight text-foreground">
-              A workspace, not another sign-off tool.
+              Everything your contracts need in one flow.
             </h2>
             <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
-              Review, draft, and decide in one place — designed around the idea that every
-              finding should be inspectable, not just summarized.
+              Paqt carries a contract from first draft to final signature, with a Contracting
+              Copilot that understands both the law and your business.
             </p>
           </div>
           <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {FEATURES.map((feature, index) => (
               <Reveal key={feature.title} from="up" delay={index * 60}>
-                <div className="group h-full rounded-xl border border-border bg-card p-5 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-[0_12px_32px_-12px_hsl(var(--primary)/0.3)]">
-                  <div className="flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary transition-transform group-hover:scale-110">
+                <div
+                  className={`group h-full rounded-xl border bg-card p-5 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_12px_32px_-12px_hsl(var(--primary)/0.3)] ${
+                    // The two capability cards carry the headline; the rest are the
+                    // supporting mechanics, so they read as secondary at a glance.
+                    feature.feature
+                      ? 'border-primary/30 hover:border-primary/40'
+                      : 'border-border hover:border-primary/30'
+                  }`}
+                >
+                  <div
+                    className={`flex size-9 items-center justify-center rounded-lg transition-transform group-hover:scale-110 ${
+                      feature.feature ? 'bg-primary/15 text-primary' : 'bg-primary/10 text-primary'
+                    }`}
+                  >
                     <feature.icon className="size-4" aria-hidden="true" />
                   </div>
                   <h3 className="mt-4 text-sm font-semibold text-foreground">{feature.title}</h3>
@@ -463,15 +487,16 @@ export function LandingPage() {
 
       {/* How it works */}
       <section id="how" className="mx-auto max-w-6xl px-4 py-16 sm:px-6 sm:py-20">
+        <span id="product" className="block" aria-hidden="true" />
         <div className="max-w-2xl">
-          <p className="tech-mono text-sm font-medium text-primary">How it works</p>
+          <p className="tech-mono text-sm font-medium text-primary">Product Workflow</p>
           <h2 className="mt-1 font-display text-3xl font-semibold tracking-tight text-foreground">
-            Three steps from upload to decision.
+            From idea to signed deal.
           </h2>
         </div>
-        <div className="relative mt-10 grid gap-6 md:grid-cols-3">
+        <div className="relative mt-10 grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
           <div
-            className="pointer-events-none absolute inset-x-6 top-6 hidden h-px bg-gradient-to-r from-transparent via-border to-transparent md:block"
+            className="pointer-events-none absolute inset-x-6 top-6 hidden h-px bg-gradient-to-r from-transparent via-border to-transparent lg:block"
             aria-hidden="true"
           />
           {STEPS.map((step) => (
@@ -533,21 +558,21 @@ export function LandingPage() {
           />
           <div className="relative">
             <h2 className="font-display text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
-              Start with one contract.
+              Ready to work smarter?
             </h2>
             <p className="mx-auto mt-3 max-w-xl text-sm leading-relaxed text-muted-foreground sm:text-base">
-              Create a free account, no credit card. Open your workspace and upload your first
-              document — or compose an agreement from a plain-English brief.
+              Draft, review, and finalize any contract in minutes with Paqt&rsquo;s Contracting
+              Copilot.
             </p>
             <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
               <Button size="lg" className="group" asChild>
                 <Link to={primaryTarget}>
-                  {signedIn ? 'Open dashboard' : 'Create a free account'}
+                  {signedIn ? 'Open dashboard' : 'Get started for free'}
                   <ArrowRight className="btn-arrow size-4" aria-hidden="true" />
                 </Link>
               </Button>
               <Button size="lg" variant="outline" asChild>
-                <Link to="/features">See all features</Link>
+                <a href="#product">See what it does</a>
               </Button>
             </div>
           </div>

@@ -11,6 +11,7 @@ import { PdfViewer } from '../components/PdfViewer';
 import { DraftViewer } from '../components/DraftViewer';
 import { ChatInterface } from '../components/ChatInterface';
 import { ExportButton } from '../components/ExportButton';
+import { useFeatureGate } from '../components/PlanUsage';
 import { ErrorState } from '../components/ErrorState';
 import { Button } from '../components/ui/button';
 import { Spinner } from '../components/ui/feedback';
@@ -41,6 +42,7 @@ export function AnalysisPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { openEntry, record, restoringRecord, attachPdfToRecord } = useAnalysis();
+  const canStartAnalysis = useFeatureGate();
 
   const pagesText = useMemo(() => pages.map((page) => page.text), [pages]);
   const totalPages = pages.length;
@@ -91,6 +93,9 @@ export function AnalysisPage() {
     const chosen = event.target.files?.[0];
     event.target.value = '';
     if (chosen) {
+      if (!canStartAnalysis('analysis')) {
+        return;
+      }
       void attachPdfToRecord(chosen);
     }
   }
