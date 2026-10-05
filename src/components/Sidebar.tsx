@@ -1,12 +1,15 @@
+import { useEffect, useState } from 'react';
 import { Link, NavLink, useNavigate } from 'react-router-dom';
 import {
   FilePenLine,
   FilePlus2,
   Home,
   LayoutDashboard,
+  LifeBuoy,
   LogOut,
   ScanSearch,
   Settings2,
+  X,
 } from 'lucide-react';
 import { useAnalysis } from '../contexts/AnalysisContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -73,10 +76,77 @@ const NAV_SECTIONS = [
     links: [
       { to: '/', label: 'Site home', icon: Home, end: true },
       { to: '/pricing', label: 'Pricing', icon: LayoutDashboard, end: false },
-      { to: '/settings', label: 'Settings', icon: Settings2, end: false },
+{ to: '/settings', label: 'Settings', icon: Settings2, end: false },
     ],
   },
-  ] as const;
+] as const;
+
+function SupportDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        onClose();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [open, onClose]);
+
+  if (!open) {
+    return null;
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="support-dialog-title"
+    >
+      <div className="w-full max-w-md rounded-xl border border-border bg-background shadow-xl">
+        <div className="flex items-start justify-between gap-4 px-6 py-5">
+          <div>
+            <h2 id="support-dialog-title" className="text-lg font-semibold tracking-tight text-foreground">
+              Need a hand?
+            </h2>
+            <div className="mt-1 space-y-2 text-sm text-muted-foreground">
+              <p>
+                Questions, feedback, or trouble with a document or your plan, tell us and we will
+                sort it out.
+              </p>
+              <p>
+                Email{' '}
+                <a
+                  href="mailto:usepaqt@gmail.com"
+                  className="font-medium text-primary underline underline-offset-2 hover:opacity-80"
+                >
+                  usepaqt@gmail.com
+                </a>{' '}
+                and we reply within one business day.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="rounded-md p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            <X className="size-4" aria-hidden="true" />
+          </button>
+        </div>
+        <div className="flex justify-end border-t border-border px-6 py-4">
+          <Button variant="outline" size="sm" onClick={onClose}>
+            Close
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function UserCard() {
   const { user, signOut } = useAuth();
@@ -132,9 +202,11 @@ function UserCard() {
 
 export function Sidebar() {
   const { user } = useAuth();
+  const [supportOpen, setSupportOpen] = useState(false);
 
   return (
     <>
+      <SupportDialog open={supportOpen} onClose={() => setSupportOpen(false)} />
       {/* Desktop sidebar */}
       <aside className="sticky top-0 hidden h-[100dvh] w-64 shrink-0 flex-col border-r border-border bg-background lg:flex">
         <div className="flex h-16 shrink-0 items-center border-b border-border px-5">
@@ -158,18 +230,18 @@ export function Sidebar() {
             </div>
           ))}
 
-          <div className="rounded-lg border border-border bg-muted/40 p-3">
-            <p className="text-sm font-medium text-foreground">Need a hand?</p>
-            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-              Questions, feedback or billing trouble, email us at{' '}
-              <a
-                href="mailto:usepaqt@gmail.com"
-                className="font-medium text-primary underline underline-offset-2 hover:opacity-80"
-              >
-                usepaqt@gmail.com
-              </a>
-              . We reply within one business day.
+          <div className="mb-6">
+            <p className="px-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+              Support
             </p>
+            <button
+              type="button"
+              onClick={() => setSupportOpen(true)}
+              className={navLinkClass({ isActive: false })}
+            >
+              <LifeBuoy className="size-4" aria-hidden="true" />
+              Need help
+            </button>
           </div>
         </div>
 
