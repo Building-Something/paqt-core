@@ -6,7 +6,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://paqt-backend.onrender.com/api/:path*"
+      "destination": "https://paqt-core.onrender.com/api/:path*"
     },
     {
       "source": "/((?!api/).*)",
