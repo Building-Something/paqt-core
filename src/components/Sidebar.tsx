@@ -76,7 +76,7 @@ const NAV_SECTIONS = [
       { to: '/settings', label: 'Settings', icon: Settings2, end: false },
     ],
   },
-] as const;
+  ] as const;
 
 function UserCard() {
   const { user, signOut } = useAuth();
@@ -157,6 +157,20 @@ export function Sidebar() {
               </nav>
             </div>
           ))}
+
+          <div className="rounded-lg border border-border bg-muted/40 p-3">
+            <p className="text-sm font-medium text-foreground">Need a hand?</p>
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+              Questions, feedback or billing trouble, email us at{' '}
+              <a
+                href="mailto:usepaqt@gmail.com"
+                className="font-medium text-primary underline underline-offset-2 hover:opacity-80"
+              >
+                usepaqt@gmail.com
+              </a>
+              . We reply within one business day.
+            </p>
+          </div>
         </div>
 
         <div className="border-t border-border p-3">
