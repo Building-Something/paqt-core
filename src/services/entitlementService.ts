@@ -182,7 +182,6 @@ export async function fetchMyUsage(): Promise<UsageSnapshot> {
     }
     const { data, error } = await client.rpc('paqt_my_usage');
     if (error) {
-      console.debug('[paqt] paqt_my_usage failed:', error.message);
       return { ...NO_USAGE, signedIn: true, status: 'none' };
     }
     return normalizeUsage(data);

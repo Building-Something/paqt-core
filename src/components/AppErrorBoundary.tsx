@@ -44,7 +44,6 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorB
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
     persistLastError(error, info);
-    console.error('[paqt][boundary]', error, info.componentStack);
   }
 
   handleReload = (): void => {

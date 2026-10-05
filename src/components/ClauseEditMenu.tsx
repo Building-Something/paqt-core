@@ -59,8 +59,7 @@ export function ClauseEditMenu({ editor }: { editor: Editor }) {
         throw new Error('empty-rewrite');
       }
       editor.chain().focus().insertContentAt({ from, to }, content).run();
-    } catch (caught) {
-      console.error('Clause edit failed', caught);
+    } catch {
       setError('Couldn’t apply this edit. Please try again.');
     } finally {
       setBusyAction(null);

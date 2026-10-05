@@ -97,7 +97,6 @@ export async function fetchRemoteHistory(userId: string): Promise<HistoryEntry[]
     .order('updated_at', { ascending: false })
     .limit(200);
   if (error) {
-    console.debug('[paqt] remote history fetch failed:', error.message);
     return [];
   }
   return (data as DocumentRow[] ?? []).map(rowToEntry);
@@ -135,7 +134,6 @@ export async function upsertRemoteHistory(
     ({ error } = await attempt(true));
   }
   if (error) {
-    console.debug('[paqt] remote history upsert failed:', error.message);
     return false;
   }
   return true;
@@ -158,14 +156,13 @@ export async function removeRemoteHistory(userId: string, id: string): Promise<v
   // removal. Storage objects are cleaned up best-effort afterwards.
   const { error } = await supabase!.from('documents').delete().eq('id', id).eq('user_id', userId);
   if (error) {
-    console.warn('[paqt] remote history delete failed:', error.message);
     return;
   }
   if (paths.length > 0) {
     try {
       await supabase!.storage.from(PREVIEW_BUCKET).remove(paths);
-    } catch (storageError) {
-      console.debug('[paqt] storage cleanup after delete failed:', storageError);
+    } catch {
+      /* storage objects are cleaned up best-effort */
     }
   }
 }
@@ -200,7 +197,6 @@ export async function uploadPreview(
     .storage.from(PREVIEW_BUCKET)
     .upload(path, blob, { contentType: 'image/jpeg', upsert: true, cacheControl: '31536000' });
   if (error) {
-    console.debug('[paqt] preview upload failed:', error.message);
     return null;
   }
   return path;
@@ -223,7 +219,6 @@ export async function uploadPdf(
       cacheControl: '31536000',
     });
   if (error) {
-    console.debug('[paqt] pdf upload failed:', error.message);
     return null;
   }
   return path;
@@ -233,10 +228,7 @@ export async function deletePreview(path: string): Promise<void> {
   if (!supabase || !path) {
     return;
   }
-  const { error } = await supabase.storage.from(PREVIEW_BUCKET).remove([path]);
-  if (error) {
-    console.debug('[paqt] preview delete failed:', error.message);
-  }
+  await supabase.storage.from(PREVIEW_BUCKET).remove([path]);
 }
 
 const signedUrlCache = new Map<string, { url: string; expiresAt: number }>();
@@ -253,7 +245,6 @@ async function getSignedUrl(path: string): Promise<string | null> {
     .from(PREVIEW_BUCKET)
     .createSignedUrl(path, 60 * 60 * 6);
   if (error || !data) {
-    console.debug('[paqt] storage signed url failed:', error?.message);
     return null;
   }
   signedUrlCache.set(path, { url: data.signedUrl, expiresAt: Date.now() + 6 * 60 * 60 * 1000 });
@@ -276,13 +267,11 @@ export async function downloadStoredPdf(path: string, name: string): Promise<Fil
   try {
     const response = await fetch(url);
     if (!response.ok) {
-      console.debug('[paqt] stored pdf download failed:', response.status);
       return null;
     }
     const blob = await response.blob();
     return new File([blob], name, { type: 'application/pdf' });
-  } catch (caught) {
-    console.debug('[paqt] stored pdf download failed:', caught);
+  } catch {
     return null;
   }
 }

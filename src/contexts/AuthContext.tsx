@@ -102,7 +102,7 @@ function broadcastForceSignout(userId: string): void {
         payload: { userId, deviceId: DEVICE_ID } satisfies AuthSyncPayload,
       });
     } catch {
-      console.debug('[paqt] auth-sync broadcast failed');
+      /* best-effort cross-tab sync */
     } finally {
       await supabase.removeChannel(channel);
     }
@@ -303,7 +303,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         await supabase.auth.signOut({ scope: 'others' });
       } catch {
-        console.debug('[paqt] revoking other sessions on other devices failed');
+        /* other sessions may outlive this one */
       }
       return { ok: true, error: null };
     },
@@ -322,8 +322,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let billingStopped = true;
     try {
       await purgeSubscriptions();
-    } catch (err) {
-      console.debug('[paqt] purgeSubscriptions failed before account deletion:', err);
+    } catch {
       billingStopped = false;
     }
 
@@ -338,9 +337,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (supabase) {
       const { error } = await supabase.rpc('delete_user');
       identityRemoved = !error;
-      if (error) {
-        console.debug('[paqt] delete_user RPC failed:', error.message);
-      }
     }
 
     broadcastForceSignout(userId);

@@ -289,9 +289,8 @@ const persistDraft = useCallback(
     setError(null);
     try {
       await exportContractPdf(doc, { fileName: draftSlug(brief), signatures });
-    } catch (caught) {
+    } catch {
       setError('The PDF could not be generated. Please try again.');
-      console.error('PDF export failed', caught);
     } finally {
       setWorking(false);
     }

@@ -399,8 +399,7 @@ async function analyzePage(page: PdfPage): Promise<PageAnalysisOutcome> {
       pageAnalysisPrompt(page),
       PER_PAGE_MAX_TOKENS,
     );
-  } catch (caught) {
-    console.warn(`Page ${page.pageNumber} analysis skipped:`, caught);
+  } catch {
     return { risks: [], keyTerms: [] };
   }
 
@@ -515,8 +514,7 @@ async function findInteractionRisks(
     let raw: unknown;
     try {
       raw = await runInteractionWindow(window.text, risks);
-    } catch (caught) {
-      console.warn('Interaction window skipped:', caught);
+    } catch {
       continue;
     }
     if (!isPlainObject(raw) || !Array.isArray(raw.risks)) {
@@ -710,8 +708,7 @@ async function synthesizeDocument(
       JSON_SYSTEM_PROMPT,
       synthesisPrompt(risks, keyTerms, baselineScore),
     );
-  } catch (caught) {
-    console.warn('Synthesis fell back to a deterministic brief:', caught);
+  } catch {
     return fallbackSynthesis(risks, keyTerms, baselineScore);
   }
 
@@ -834,8 +831,8 @@ export async function analyzePages(
   try {
     const found = await findInteractionRisks(pages, baseRisks);
     interactionRisks = keepVerifiedRisks(found);
-  } catch (caught) {
-    console.warn('Cross-clause interaction pass skipped:', caught);
+  } catch {
+    /* keep the per-page risks as the result */
   }
 
   const merged = normalizeRisks([...baseRisks, ...interactionRisks]);

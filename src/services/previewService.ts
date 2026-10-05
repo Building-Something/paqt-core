@@ -88,8 +88,7 @@ export async function renderPdfPreview(file: File): Promise<Blob | null> {
     } finally {
       await loadingTask.destroy().catch(() => undefined);
     }
-  } catch (caught) {
-    console.debug('[paqt] preview render failed:', caught);
+  } catch {
     return null;
   }
 }

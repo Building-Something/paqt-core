@@ -145,7 +145,6 @@ function toErrorMessage(error: unknown): AnalysisError {
     const code: GroqErrorCode = KNOWN_CODES.includes(error.code as GroqErrorCode)
       ? (error.code as GroqErrorCode)
       : 'unknown';
-    console.error(`[paqt] groq error ${error.code} (${error.status}):`, error.message);
     const passingThrough =
       code === 'rate_limited_daily' || isBillingErrorCode(error.code);
     return {
@@ -211,8 +210,6 @@ export function AnalysisProvider({ children }: AnalysisProviderProps) {
           ...prev,
           label: 'Still working on the contract\u2026',
         }));
-      } else {
-        console.debug('[paqt] pacing requests:', notice);
       }
     });
     return () => setGroqWaitListener(null);
@@ -401,8 +398,7 @@ export function AnalysisProvider({ children }: AnalysisProviderProps) {
       if (!file && checkpoint.fileB64) {
         try {
           file = await dataUrlToFile(checkpoint.fileB64, checkpoint.fileName);
-        } catch (caught) {
-          console.warn('Could not restore the saved PDF:', caught);
+        } catch {
           file = null;
         }
       }
@@ -502,8 +498,8 @@ export function AnalysisProvider({ children }: AnalysisProviderProps) {
           const extracted = await extractPdfText(file);
           setPages(extracted);
           setContractText(await extractContractText(extracted));
-        } catch (caught) {
-          console.debug('[paqt] failed to restore saved PDF:', caught);
+        } catch {
+          /* nothing to restore */
         } finally {
           setProgress(makeProgress('complete', 'Analysis complete'));
           setRestoringRecord(false);
@@ -540,8 +536,7 @@ export function AnalysisProvider({ children }: AnalysisProviderProps) {
             ? 'Document attached — viewer and chat are ready.'
             : 'Document attached for this session. Sign in to keep it saved to your account.',
         );
-      } catch (caught) {
-        console.debug('[paqt] attach pdf failed:', caught);
+      } catch {
         toast('error', 'Could not attach this document. The file may be invalid.');
         setFile(null);
       } finally {

@@ -23,7 +23,6 @@ window.addEventListener('error', (event) => {
   const error = event.error;
   const detail = error instanceof Error ? `${error.message}\n${error.stack ?? ''}` : event.message;
   recordRuntimeError('error', detail);
-  console.error('[paqt][runtime]', detail);
 });
 
 window.addEventListener('unhandledrejection', (event) => {
@@ -31,7 +30,6 @@ window.addEventListener('unhandledrejection', (event) => {
   const detail =
     reason instanceof Error ? `${reason.message}\n${reason.stack ?? ''}` : String(reason);
   recordRuntimeError('rejection', detail);
-  console.error('[paqt][runtime]', detail);
 });
 
 /**
