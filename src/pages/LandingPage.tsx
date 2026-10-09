@@ -444,7 +444,7 @@ export function LandingPage() {
 
       {/* Features */}
       <section id="features" className="border-t border-border bg-card/50">
-        <div className="mx-auto max-w-6xl px-4 pt-16 sm:px-6 sm:pt-20">
+        <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 sm:py-20">
           <div className="max-w-2xl">
             <p className="tech-mono text-sm font-medium text-primary">The Product</p>
             <h2 className="mt-1 font-display text-3xl font-semibold tracking-tight text-foreground">
@@ -455,32 +455,32 @@ export function LandingPage() {
               Copilot that understands both the law and your business.
             </p>
           </div>
-          <div className="mt-8 flex items-center gap-3">
-            <span className="tech-mono text-xs font-semibold uppercase tracking-wider text-primary">
-              Live demo
-            </span>
-            <span className="h-px flex-1 bg-border" aria-hidden="true" />
-          </div>
-        </div>
 
-        {/* Product demo — full-bleed, only the video's own borders */}
-        <Reveal from="scale">
-          <div
-            className="relative mt-6 w-full overflow-hidden border-y border-border bg-muted"
-            style={{ aspectRatio: '1.87' }}
-          >
-            <iframe
-              src="https://app.supademo.com/embed/cmuzkly5d02edqmpcq754bqca?embed_v=2&utm_source=embed"
-              loading="lazy"
-              title="Draft, Revise, and Analyze Contracts with Paqt"
-              allow="clipboard-write"
-              allowFullScreen
-              className="absolute inset-0 size-full border-0"
-            />
+          {/* Product demo */}
+          <div className="mt-10">
+            <div className="mb-4 flex items-center gap-3">
+              <span className="tech-mono text-xs font-semibold uppercase tracking-wider text-primary">
+                Live demo
+              </span>
+              <span className="h-px flex-1 bg-border" aria-hidden="true" />
+            </div>
+            <Reveal from="scale">
+              <div
+                className="relative mx-auto w-full overflow-hidden rounded-2xl border border-border bg-card shadow-[0_24px_64px_-32px_hsl(var(--primary)/0.35)]"
+                style={{ aspectRatio: '1.87', maxHeight: '80svh', maxWidth: 'calc(80svh * 1.87)' }}
+              >
+                <iframe
+                  src="https://app.supademo.com/embed/cmuzkly5d02edqmpcq754bqca?embed_v=2&utm_source=embed"
+                  loading="lazy"
+                  title="Draft, Revise, and Analyze Contracts with Paqt"
+                  allow="clipboard-write"
+                  allowFullScreen
+                  className="absolute inset-0 size-full border-0"
+                />
+              </div>
+            </Reveal>
           </div>
-        </Reveal>
 
-        <div className="mx-auto max-w-6xl px-4 pb-16 sm:px-6 sm:pb-20">
           <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {FEATURES.map((feature, index) => (
               <Reveal key={feature.title} from="up" delay={index * 60}>
