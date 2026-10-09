@@ -455,6 +455,34 @@ export function LandingPage() {
               Copilot that understands both the law and your business.
             </p>
           </div>
+
+          {/* Product demo */}
+          <div className="mt-10">
+            <div className="mb-4 flex items-center gap-3">
+              <span className="tech-mono text-xs font-semibold uppercase tracking-wider text-primary">
+                Live demo
+              </span>
+              <span className="h-px flex-1 bg-border" aria-hidden="true" />
+            </div>
+            <Reveal from="scale">
+              <div className="overflow-hidden rounded-2xl border border-border bg-card p-1.5 shadow-[0_24px_64px_-32px_hsl(var(--primary)/0.35)] sm:p-2">
+                <div
+                  className="relative w-full overflow-hidden rounded-xl bg-muted"
+                  style={{ aspectRatio: '1.87', maxHeight: '80svh' }}
+                >
+                  <iframe
+                    src="https://app.supademo.com/embed/cmuzkly5d02edqmpcq754bqca?embed_v=2&utm_source=embed"
+                    loading="lazy"
+                    title="Draft, Revise, and Analyze Contracts with Paqt"
+                    allow="clipboard-write"
+                    allowFullScreen
+                    className="absolute inset-0 size-full border-0"
+                  />
+                </div>
+              </div>
+            </Reveal>
+          </div>
+
           <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {FEATURES.map((feature, index) => (
               <Reveal key={feature.title} from="up" delay={index * 60}>
