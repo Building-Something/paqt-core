@@ -466,8 +466,8 @@ export function LandingPage() {
             </div>
             <Reveal from="scale">
               <div
-                className="relative mx-auto w-full overflow-hidden rounded-2xl border border-border bg-card shadow-[0_24px_64px_-32px_hsl(var(--primary)/0.35)]"
-                style={{ aspectRatio: '1.87', maxHeight: '80svh', maxWidth: 'calc(80svh * 1.87)' }}
+                className="relative w-full overflow-hidden rounded-2xl bg-card shadow-[0_24px_64px_-32px_hsl(var(--primary)/0.35)]"
+                style={{ aspectRatio: '1.87' }}
               >
                 <iframe
                   src="https://app.supademo.com/embed/cmuzkly5d02edqmpcq754bqca?embed_v=2&utm_source=embed"
