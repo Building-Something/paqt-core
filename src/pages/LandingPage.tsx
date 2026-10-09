@@ -465,20 +465,18 @@ export function LandingPage() {
               <span className="h-px flex-1 bg-border" aria-hidden="true" />
             </div>
             <Reveal from="scale">
-              <div className="overflow-hidden rounded-2xl border border-border bg-card p-1.5 shadow-[0_24px_64px_-32px_hsl(var(--primary)/0.35)] sm:p-2">
-                <div
-                  className="relative w-full overflow-hidden rounded-xl bg-muted"
-                  style={{ aspectRatio: '1.87', maxHeight: '80svh' }}
-                >
-                  <iframe
-                    src="https://app.supademo.com/embed/cmuzkly5d02edqmpcq754bqca?embed_v=2&utm_source=embed"
-                    loading="lazy"
-                    title="Draft, Revise, and Analyze Contracts with Paqt"
-                    allow="clipboard-write"
-                    allowFullScreen
-                    className="absolute inset-0 size-full border-0"
-                  />
-                </div>
+              <div
+                className="relative mx-auto w-full overflow-hidden rounded-2xl border border-border bg-card shadow-[0_24px_64px_-32px_hsl(var(--primary)/0.35)]"
+                style={{ aspectRatio: '1.87', maxHeight: '80svh', maxWidth: 'calc(80svh * 1.87)' }}
+              >
+                <iframe
+                  src="https://app.supademo.com/embed/cmuzkly5d02edqmpcq754bqca?embed_v=2&utm_source=embed"
+                  loading="lazy"
+                  title="Draft, Revise, and Analyze Contracts with Paqt"
+                  allow="clipboard-write"
+                  allowFullScreen
+                  className="absolute inset-0 size-full border-0"
+                />
               </div>
             </Reveal>
           </div>
