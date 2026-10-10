@@ -119,6 +119,24 @@ export function MarketingFooter() {
           Decision support, not legal advice.
         </p>
       </div>
+      <div className="mx-auto flex max-w-6xl justify-center px-4 pb-8 sm:px-6">
+        <a
+          href="https://openhunts.com"
+          target="_blank"
+          rel="noopener noreferrer"
+          title="OpenHunts Club"
+          className="inline-flex opacity-70 transition-opacity hover:opacity-100"
+        >
+          <img
+            src="https://cdn.openhunts.com/badges/club.webp"
+            alt="OpenHunts Club Member"
+            className="h-9 w-auto"
+            width={195}
+            height={105}
+            loading="lazy"
+          />
+        </a>
+      </div>
     </footer>
   );
 }
